@@ -1,0 +1,5 @@
+{
+  "name": "Market Attribution Intelligence",
+  "description": "A quantitative finance dashboard tracking NSE and Global markets. Features an AI-powered attribution engine that correlates market volatility with financial news headlines using Gemini 3 Pro.",
+  "requestFramePermissions": []
+}
