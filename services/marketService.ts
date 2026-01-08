@@ -3,21 +3,15 @@ import { supabase } from '../lib/supabase';
 
 /**
  * SIMULATED BACKEND TOOL
- * In a real-world scenario, this would be a Python script using yfinance.
- * For this dashboard, we simulate the 'Fetch daily close for ^NSEI, ^IXIC, and GIFT Nifty' logic.
+ * Resilient manual upsert logic for market data telemetry.
  */
 export const ingestLatestMarketData = async (): Promise<MarketLog> => {
-  // Simulate fetching ^NSEI, ^IXIC, and GIFT Nifty
-  // In reality: 
-  // nsei = yf.Ticker("^NSEI").history(period="1d")['Close'].iloc[-1]
-  // ixic = yf.Ticker("^IXIC").history(period="1d")['Close'].iloc[-1]
-  
   const today = new Date().toISOString().split('T')[0];
-  const lastNiftyClose = 22450.00; // Mocked previous close
-  const currentNiftyClose = 22555.50; // +105.50 points (Threshold Met!)
+  const lastNiftyClose = 22450.00;
+  const currentNiftyClose = 22555.50; 
   const niftyChange = currentNiftyClose - lastNiftyClose;
   
-  const newLog = {
+  const payload = {
     log_date: today,
     nifty_close: currentNiftyClose,
     nifty_change: niftyChange,
@@ -28,26 +22,43 @@ export const ingestLatestMarketData = async (): Promise<MarketLog> => {
     threshold_met: Math.abs(niftyChange) > 90
   };
 
-  // Upsert to Supabase
-  const { data, error } = await supabase
+  // Resilient Manual Upsert
+  let finalRecord;
+  const { data: existing } = await supabase
     .from('market_logs')
-    .upsert(newLog, { onConflict: 'log_date' })
-    .select()
-    .single();
+    .select('id')
+    .eq('log_date', today)
+    .maybeSingle();
 
-  if (error) throw error;
+  if (existing) {
+    const { data, error } = await supabase
+      .from('market_logs')
+      .update(payload)
+      .eq('id', existing.id)
+      .select()
+      .single();
+    if (error) throw error;
+    finalRecord = data;
+  } else {
+    const { data, error } = await supabase
+      .from('market_logs')
+      .insert(payload)
+      .select()
+      .single();
+    if (error) throw error;
+    finalRecord = data;
+  }
 
   return {
-    id: data.id,
-    date: data.log_date,
-    niftyClose: data.nifty_close,
-    niftyChange: data.nifty_change,
-    niftyChangePercent: data.nifty_change_percent,
-    nasdaqClose: data.nasdaq_close,
-    nasdaqChangePercent: data.nasdaq_change_percent,
-    giftNiftyClose: data.gift_nifty_close,
-    thresholdMet: data.threshold_met,
-    // Fix: isAnalyzing now exists on MarketLog type
+    id: finalRecord.id,
+    date: finalRecord.log_date,
+    niftyClose: finalRecord.nifty_close,
+    niftyChange: finalRecord.nifty_change,
+    niftyChangePercent: finalRecord.nifty_change_percent,
+    nasdaqClose: finalRecord.nasdaq_close,
+    nasdaqChangePercent: finalRecord.nasdaq_change_percent,
+    giftNiftyClose: finalRecord.gift_nifty_close,
+    thresholdMet: finalRecord.threshold_met,
     isAnalyzing: false
   };
 };

@@ -10,24 +10,24 @@ const getClient = () => {
 
 export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution> => {
   const ai = getClient();
-  // Using gemini-3-pro-preview for complex financial analysis
+  // Using gemini-3-pro-preview for advanced reasoning
   const modelId = "gemini-3-pro-preview";
 
-  // Refined prompt based on user requirements
   const prompt = `
-    You are a high-frequency quantitative financial analyst. 
+    You are a world-class senior quantitative financial analyst and macro strategist.
     
     Context for ${log.date}:
-    - Nifty 50 Index (^NSEI): ${log.niftyChange > 0 ? '+' : ''}${log.niftyChange} points (${log.niftyChangePercent}%)
-    - NASDAQ Composite (^IXIC): ${log.nasdaqChangePercent}%
+    - Nifty 50 Index (^NSEI) Close: ${log.niftyClose}
+    - Nifty 50 Change: ${log.niftyChange > 0 ? '+' : ''}${log.niftyChange} points (${log.niftyChangePercent}%)
+    - NASDAQ Composite (^IXIC) Change: ${log.nasdaqChangePercent}%
     - GIFT Nifty: ${log.giftNiftyClose}
     
     CRITICAL TASK:
-    The Nifty 50 moved ${Math.abs(log.niftyChange)} points, crossing our 90-point volatility threshold.
-    1. Using Google Search, identify the TOP 4 Indian financial headlines from the last 24 hours relative to ${log.date}.
-    2. Analyze these headlines to determine which specific event (or combination) caused this move.
-    3. Categorize the attribution (Macro, Global, Corporate, or Geopolitical).
-    4. Provide a professional executive summary explaining the causal link.
+    Perform an exhaustive causal attribution analysis.
+    1. SEARCH: Use Google Search to find the top 5-7 critical financial developments affecting Indian markets on ${log.date}. Look for specific triggers like FII/DII data, global central bank cues, geopolitical events (e.g. trade war threats), and specific sector-level shocks.
+    2. REASON: Correlate these events with the Nifty move.
+    3. SUMMARY: Write a long, detailed, and professional summary (minimum 100 words). Explain EXACTLY why the market moved. Mention specific sectors (e.g., Metal, IT, Energy), FII outflow numbers if available, and global cues (NASDAQ/Treasury yields). 
+    4. HEADLINE: Create a punchy, factual headline that summarizes the main driver.
   `;
 
   try {
@@ -36,12 +36,13 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],
+        thinkingConfig: { thinkingBudget: 32768 }, // Max thinking for deep reasoning
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            headline: { type: Type.STRING, description: "The primary headline explaining the move" },
-            summary: { type: Type.STRING, description: "A summary of the top 4 headlines and their causal impact" },
+            headline: { type: Type.STRING, description: "Detailed headline including indices or major drivers" },
+            summary: { type: Type.STRING, description: "Exhaustive professional summary (100+ words)" },
             category: { type: Type.STRING, enum: ["Macro", "Global", "Corporate", "Geopolitical"] },
             sentiment: { type: Type.STRING, enum: ["POSITIVE", "NEGATIVE", "NEUTRAL"] },
             relevanceScore: { type: Type.NUMBER, description: "Confidence score 0.0 to 1.0" }
@@ -51,7 +52,6 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
       }
     });
 
-    // Extract search grounding sources as per mandatory guidelines
     const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
     const sources = groundingChunks?.map((chunk: any) => ({
       uri: chunk.web?.uri,
@@ -60,44 +60,38 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
 
     const result = JSON.parse(response.text || "{}");
     const attribution: NewsAttribution = {
-      headline: result.headline || "Market Volatility Detected",
-      summary: result.summary || "Attribution engine identified significant moves based on daily financial telemetry.",
+      headline: result.headline || "Market Volatility Analysis",
+      summary: result.summary || "Detailed attribution pending broader search indexing.",
       category: (result.category as any) || "Macro",
-      // Fix: Use string literal 'NEUTRAL' instead of Sentiment.NEUTRAL which is a type
       sentiment: (result.sentiment as any) || 'NEUTRAL',
       relevanceScore: result.relevanceScore || 0.5,
       sources
     };
 
-    // PERSIST TO SUPABASE
-    const { error } = await supabase
-      .from('news_attribution')
-      .upsert({
-        market_log_id: log.id,
-        headline: attribution.headline,
-        summary: attribution.summary,
-        category: attribution.category,
-        sentiment: attribution.sentiment,
-        relevance_score: attribution.relevanceScore,
-        // Optional: persisting sources if table schema supports it
-        sources: attribution.sources
-      }, {
-        onConflict: 'market_log_id'
-      });
+    const payload = {
+      market_log_id: log.id,
+      headline: attribution.headline,
+      summary: attribution.summary,
+      category: attribution.category,
+      sentiment: attribution.sentiment,
+      relevance_score: attribution.relevanceScore
+    };
 
-    if (error) console.error("Supabase Persistence Error:", error.message);
+    const { data: existing } = await supabase
+      .from('news_attribution')
+      .select('id')
+      .eq('market_log_id', log.id)
+      .maybeSingle();
+
+    if (existing) {
+      await supabase.from('news_attribution').update(payload).eq('id', existing.id);
+    } else {
+      await supabase.from('news_attribution').insert(payload);
+    }
 
     return attribution;
-
   } catch (error: any) {
-    console.error("Gemini Grounding Error:", error.message || error);
-    return {
-      headline: "Attribution Engine Timeout",
-      summary: "The engine was unable to correlate headlines in real-time. This usually happens if search data for the specific date is sparse.",
-      category: "Macro",
-      // Fix: Use string literal 'NEUTRAL' instead of Sentiment.NEUTRAL which is a type
-      sentiment: 'NEUTRAL',
-      relevanceScore: 0
-    };
+    console.error("Gemini Error:", error);
+    throw error;
   }
 };
