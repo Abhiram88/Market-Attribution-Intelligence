@@ -1,38 +1,28 @@
-export enum MarketIndex {
-  NIFTY = 'NIFTY 50',
-  NASDAQ = 'NASDAQ',
-  GIFT = 'GIFT NIFTY',
-}
 
-export enum Sentiment {
-  POSITIVE = 'POSITIVE',
-  NEGATIVE = 'NEGATIVE',
-  NEUTRAL = 'NEUTRAL',
-}
+// types.ts
+export type Sentiment = 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL';
 
 export interface NewsAttribution {
   headline: string;
   summary: string;
-  category: 'Macro' | 'Global' | 'Corporate' | 'Geopolitical';
+  category: string;
   sentiment: Sentiment;
-  relevanceScore: number; // 0 to 1
+  relevanceScore: number;
+  // Added sources for search grounding URLs as per guidelines
+  sources?: { uri: string; title: string }[];
 }
 
 export interface MarketLog {
   id: string;
   date: string;
   niftyClose: number;
-  niftyChange: number; // Absolute point change
+  niftyChange: number;
   niftyChangePercent: number;
   nasdaqClose: number;
   nasdaqChangePercent: number;
   giftNiftyClose: number;
-  thresholdMet: boolean; // > 90 points
-  attribution?: NewsAttribution;
-  isAnalyzing?: boolean;
-}
-
-export interface MarketState {
-  logs: MarketLog[];
-  lastUpdated: string;
+  thresholdMet: boolean;
+  attribution?: NewsAttribution; // Linked via news_attribution table
+  // Added isAnalyzing to track UI state for each log entry
+  isAnalyzing: boolean;
 }

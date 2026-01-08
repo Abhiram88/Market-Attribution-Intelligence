@@ -47,6 +47,7 @@ export const ingestLatestMarketData = async (): Promise<MarketLog> => {
     nasdaqChangePercent: data.nasdaq_change_percent,
     giftNiftyClose: data.gift_nifty_close,
     thresholdMet: data.threshold_met,
+    // Fix: isAnalyzing now exists on MarketLog type
     isAnalyzing: false
   };
 };

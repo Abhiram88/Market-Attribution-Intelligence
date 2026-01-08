@@ -10,6 +10,7 @@ const getClient = () => {
 
 export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution> => {
   const ai = getClient();
+  // Using gemini-3-pro-preview for complex financial analysis
   const modelId = "gemini-3-pro-preview";
 
   // Refined prompt based on user requirements
@@ -50,13 +51,22 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
       }
     });
 
+    // Extract search grounding sources as per mandatory guidelines
+    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+    const sources = groundingChunks?.map((chunk: any) => ({
+      uri: chunk.web?.uri,
+      title: chunk.web?.title
+    })).filter((s: any) => s.uri) || [];
+
     const result = JSON.parse(response.text || "{}");
     const attribution: NewsAttribution = {
       headline: result.headline || "Market Volatility Detected",
       summary: result.summary || "Attribution engine identified significant moves based on daily financial telemetry.",
       category: (result.category as any) || "Macro",
-      sentiment: (result.sentiment as any) || Sentiment.NEUTRAL,
-      relevanceScore: result.relevanceScore || 0.5
+      // Fix: Use string literal 'NEUTRAL' instead of Sentiment.NEUTRAL which is a type
+      sentiment: (result.sentiment as any) || 'NEUTRAL',
+      relevanceScore: result.relevanceScore || 0.5,
+      sources
     };
 
     // PERSIST TO SUPABASE
@@ -68,7 +78,9 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
         summary: attribution.summary,
         category: attribution.category,
         sentiment: attribution.sentiment,
-        relevance_score: attribution.relevanceScore
+        relevance_score: attribution.relevanceScore,
+        // Optional: persisting sources if table schema supports it
+        sources: attribution.sources
       }, {
         onConflict: 'market_log_id'
       });
@@ -83,7 +95,8 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
       headline: "Attribution Engine Timeout",
       summary: "The engine was unable to correlate headlines in real-time. This usually happens if search data for the specific date is sparse.",
       category: "Macro",
-      sentiment: Sentiment.NEUTRAL,
+      // Fix: Use string literal 'NEUTRAL' instead of Sentiment.NEUTRAL which is a type
+      sentiment: 'NEUTRAL',
       relevanceScore: 0
     };
   }
