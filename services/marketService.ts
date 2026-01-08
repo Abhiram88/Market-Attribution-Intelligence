@@ -1,14 +1,16 @@
+
 import { MarketLog } from '../types';
 import { supabase } from '../lib/supabase';
 
 /**
  * SIMULATED BACKEND TOOL
  * Resilient manual upsert logic for market data telemetry.
+ * Updated with realistic user-provided baseline for January 2026.
  */
 export const ingestLatestMarketData = async (): Promise<MarketLog> => {
   const today = new Date().toISOString().split('T')[0];
-  const lastNiftyClose = 22450.00;
-  const currentNiftyClose = 22555.50; 
+  const lastNiftyClose = 26140.75; // Based on user screenshot "Prev close"
+  const currentNiftyClose = 25876.85; // Based on user screenshot "Current"
   const niftyChange = currentNiftyClose - lastNiftyClose;
   
   const payload = {
@@ -16,9 +18,9 @@ export const ingestLatestMarketData = async (): Promise<MarketLog> => {
     nifty_close: currentNiftyClose,
     nifty_change: niftyChange,
     nifty_change_percent: (niftyChange / lastNiftyClose) * 100,
-    nasdaq_close: 16400.20,
-    nasdaq_change_percent: 0.85,
-    gift_nifty_close: 22610.00,
+    nasdaq_close: 23584.27,
+    nasdaq_change_percent: -1.2,
+    gift_nifty_close: 25950.00,
     threshold_met: Math.abs(niftyChange) > 90
   };
 

@@ -1,16 +1,11 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { MarketLog, NewsAttribution, Sentiment } from "../types";
 import { supabase } from "../lib/supabase";
 
-const getClient = () => {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("API Key not found");
-  return new GoogleGenAI({ apiKey });
-};
-
 export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution> => {
-  const ai = getClient();
-  // Using gemini-3-pro-preview for advanced reasoning
+  // Always create a new instance right before making an API call for up-to-date key
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
   const modelId = "gemini-3-pro-preview";
 
   const prompt = `
@@ -23,11 +18,24 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
     - GIFT Nifty: ${log.giftNiftyClose}
     
     CRITICAL TASK:
-    Perform an exhaustive causal attribution analysis.
-    1. SEARCH: Use Google Search to find the top 5-7 critical financial developments affecting Indian markets on ${log.date}. Look for specific triggers like FII/DII data, global central bank cues, geopolitical events (e.g. trade war threats), and specific sector-level shocks.
-    2. REASON: Correlate these events with the Nifty move.
-    3. SUMMARY: Write a long, detailed, and professional summary (minimum 100 words). Explain EXACTLY why the market moved. Mention specific sectors (e.g., Metal, IT, Energy), FII outflow numbers if available, and global cues (NASDAQ/Treasury yields). 
-    4. HEADLINE: Create a punchy, factual headline that summarizes the main driver.
+    Perform an exhaustive, multi-layered causal attribution analysis. 
+    
+    1. SEARCH: Use Google Search to find the most significant financial developments affecting Indian markets on ${log.date}. Specifically look for:
+       - Geopolitical escalations (trade wars, tariff threats, conflicts).
+       - Global macro data (Fed comments, US inflation, Treasury yields).
+       - Institutional flows (FII/DII net data).
+       - Sector-specific shocks (Metal, IT, Energy, Banking).
+    
+    2. REASON: Use your thinking capabilities to connect these events to the ${log.niftyChangePercent}% move in the Nifty 50.
+    
+    3. SUMMARY: Provide a COMPREHENSIVE and DETAILED analysis. 
+       - Aim for at least 250 words.
+       - Do NOT truncate. 
+       - Mention specific stock names (e.g., Hindalco, ONGC, TCS) and their price movements if relevant.
+       - Include FII outflow/inflow figures if available.
+       - Explain the "Why" behind the "What".
+    
+    4. HEADLINE: Create a factual, heavy-hitting headline summarizing the core narrative.
   `;
 
   try {
@@ -36,16 +44,17 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],
-        thinkingConfig: { thinkingBudget: 32768 }, // Max thinking for deep reasoning
+        thinkingConfig: { thinkingBudget: 4000 },
+        maxOutputTokens: 8000, // Ensure there's plenty of room for the full summary
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            headline: { type: Type.STRING, description: "Detailed headline including indices or major drivers" },
-            summary: { type: Type.STRING, description: "Exhaustive professional summary (100+ words)" },
+            headline: { type: Type.STRING, description: "Detailed summary headline" },
+            summary: { type: Type.STRING, description: "Full exhaustive professional summary (minimum 250 words)" },
             category: { type: Type.STRING, enum: ["Macro", "Global", "Corporate", "Geopolitical"] },
             sentiment: { type: Type.STRING, enum: ["POSITIVE", "NEGATIVE", "NEUTRAL"] },
-            relevanceScore: { type: Type.NUMBER, description: "Confidence score 0.0 to 1.0" }
+            relevanceScore: { type: Type.NUMBER, description: "Relevance score from 0 to 1" }
           },
           required: ["headline", "summary", "category", "sentiment", "relevanceScore"]
         }
@@ -60,11 +69,11 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
 
     const result = JSON.parse(response.text || "{}");
     const attribution: NewsAttribution = {
-      headline: result.headline || "Market Volatility Analysis",
-      summary: result.summary || "Detailed attribution pending broader search indexing.",
+      headline: result.headline || "Market Dynamic Analysis",
+      summary: result.summary || "Detailed analysis is being compiled from real-time financial telemetry.",
       category: (result.category as any) || "Macro",
       sentiment: (result.sentiment as any) || 'NEUTRAL',
-      relevanceScore: result.relevanceScore || 0.5,
+      relevanceScore: result.relevanceScore || 1.0,
       sources
     };
 
@@ -91,7 +100,11 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
 
     return attribution;
   } catch (error: any) {
-    console.error("Gemini Error:", error);
+    console.error("Gemini Analysis Pipeline Error:", error);
+    if (error.message?.includes("Requested entity was not found")) {
+      // This might indicate an API key issue, handled by the UI refresh logic
+      throw new Error("API_KEY_ERROR");
+    }
     throw error;
   }
 };
