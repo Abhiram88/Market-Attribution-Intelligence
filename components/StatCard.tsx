@@ -1,11 +1,11 @@
+
 import React from 'react';
 
-// 1. Define the Props interface
 interface StatCardProps {
   title: string;
-  value: number | string; // Supports numbers or formatted strings
-  change?: number;        // Optional: The absolute point change
-  changePercent?: number; // Optional: The percentage change
+  value: number | string;
+  change?: number;
+  changePercent?: number;
 }
 
 export const StatCard: React.FC<StatCardProps> = ({ 
@@ -14,29 +14,26 @@ export const StatCard: React.FC<StatCardProps> = ({
   change, 
   changePercent 
 }) => {
-  // 2. Logic to determine if the move is positive or negative
   const isPositive = (change ?? 0) >= 0;
   const isZero = change === 0 || change === undefined;
   
-  // 3. Dynamic color classes for financial trends
   const trendColorClass = isZero 
     ? "text-slate-400" 
-    : isPositive ? "text-emerald-400" : "text-rose-400";
+    : isPositive ? "text-emerald-600" : "text-rose-600";
 
   return (
-    <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700/50 shadow-xl backdrop-blur-sm transition-all hover:bg-slate-800/80">
-      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">
+    <div className="bg-white p-8 rounded-[2rem] border border-slate-200 shadow-xl shadow-slate-200/50 transition-all hover:shadow-2xl hover:-translate-y-1 duration-300">
+      <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-3">
         {title}
       </h4>
       
       <div className="flex items-baseline justify-between">
-        <h3 className="text-3xl font-black text-white tracking-tight">
+        <h3 className="text-3xl font-black text-slate-900 tracking-tighter">
           {typeof value === 'number' ? value.toLocaleString() : value}
         </h3>
         
-        {/* 4. Only show trend indicators if change data exists */}
         {(change !== undefined || changePercent !== undefined) && (
-          <div className={`flex items-center gap-1 text-sm font-bold ${trendColorClass}`}>
+          <div className={`flex items-center gap-1.5 text-xs font-black ${trendColorClass}`}>
             {!isZero && (
               <svg 
                 xmlns="http://www.w3.org/2000/svg" 
@@ -48,15 +45,14 @@ export const StatCard: React.FC<StatCardProps> = ({
               </svg>
             )}
             <span>
-              {change !== undefined && Math.abs(change).toFixed(2)}
+              {change !== undefined && Math.abs(change).toFixed(1)}
               {changePercent !== undefined && ` (${Math.abs(changePercent).toFixed(2)}%)`}
             </span>
           </div>
         )}
       </div>
       
-      {/* 5. Visual "mini-chart" indicator bar */}
-      <div className="mt-4 w-full h-1 bg-slate-700 rounded-full overflow-hidden">
+      <div className="mt-6 w-full h-1 bg-slate-100 rounded-full overflow-hidden">
         <div 
           className={`h-full transition-all duration-1000 ${isPositive ? 'bg-emerald-500' : 'bg-rose-500'}`}
           style={{ width: isZero ? '0%' : '100%' }}

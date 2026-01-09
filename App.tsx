@@ -158,32 +158,32 @@ const App: React.FC = () => {
   const latest = logs[0] || { niftyClose: 0, niftyChange: 0, niftyChangePercent: 0, nasdaqClose: 0, giftNiftyClose: 0 };
 
   return (
-    <div className={`min-h-screen transition-colors duration-500 font-sans selection:bg-indigo-500/30 overflow-x-hidden ${activeTab === 'live' ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'}`}>
+    <div className="min-h-screen bg-slate-50 text-slate-900 transition-colors duration-500 font-sans selection:bg-indigo-500/30 overflow-x-hidden">
       
       {/* Universal Navigation */}
-      <nav className="max-w-7xl mx-auto p-8 md:p-12 space-y-12">
+      <nav className="max-w-7xl mx-auto p-8 md:p-12">
         <div className="flex flex-col md:flex-row justify-between items-center gap-8">
           <div className="flex flex-col items-center md:items-start group">
-            <h1 className="text-4xl font-black uppercase tracking-tighter flex items-center gap-4 group-hover:scale-[1.02] transition-transform">
-              <div className="w-14 h-14 bg-indigo-600 rounded-[1.25rem] flex items-center justify-center shadow-2xl shadow-indigo-600/30 border border-indigo-500/30">IQ</div>
+            <h1 className="text-4xl font-black uppercase tracking-tighter flex items-center gap-4 group-hover:scale-[1.01] transition-transform">
+              <div className="w-14 h-14 bg-indigo-600 rounded-[1.25rem] flex items-center justify-center shadow-2xl shadow-indigo-600/20 border border-indigo-500/10 text-white">IQ</div>
               Market Attribution
             </h1>
-            <span className="text-[11px] text-slate-500 font-mono tracking-[0.4em] uppercase font-black mt-3 flex items-center gap-2">
+            <span className="text-[11px] text-slate-400 font-mono tracking-[0.4em] uppercase font-black mt-3 flex items-center gap-2">
               <span className="w-1 h-1 bg-indigo-500 rounded-full animate-pulse"></span>
-              Quant Strategy Layer // MBA Framework
+              Quant Strategy Layer // Real-Time Intelligence
             </span>
           </div>
 
-          <div className="flex bg-slate-900/50 p-1 rounded-2xl border border-slate-800 backdrop-blur-md">
+          <div className="flex bg-white p-1 rounded-2xl border border-slate-200 shadow-sm">
             <button 
               onClick={() => setActiveTab('live')}
-              className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] transition-all ${activeTab === 'live' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-100'}`}
+              className={`px-8 py-3 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] transition-all ${activeTab === 'live' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
             >
               Live Monitor
             </button>
             <button 
               onClick={() => setActiveTab('research')}
-              className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] transition-all ${activeTab === 'research' ? 'bg-white text-slate-900 shadow-lg' : 'text-slate-400 hover:text-slate-100'}`}
+              className={`px-8 py-3 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] transition-all ${activeTab === 'research' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
             >
               Research Data
             </button>
@@ -192,13 +192,13 @@ const App: React.FC = () => {
       </nav>
 
       {activeTab === 'live' ? (
-        <div className="max-w-7xl mx-auto px-8 md:px-12 pb-20 space-y-16 animate-in slide-in-from-bottom-4 duration-500">
+        <div className="max-w-7xl mx-auto px-8 md:px-12 pb-20 space-y-12 animate-in slide-in-from-bottom-2 duration-500">
           <div className="flex justify-between items-center">
-            <h2 className="text-2xl font-black uppercase tracking-tight">Daily Monitor</h2>
+            <h2 className="text-2xl font-black uppercase tracking-tight text-slate-800">Daily Monitor</h2>
             <div className="flex items-center gap-4">
               <button 
                 onClick={fetchMarketData}
-                className="p-4 bg-slate-900 rounded-2xl hover:bg-slate-800 transition-all border border-slate-800 shadow-lg"
+                className="p-4 bg-white rounded-2xl hover:bg-slate-50 transition-all border border-slate-200 shadow-sm"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-5 h-5 text-slate-400">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
@@ -207,7 +207,7 @@ const App: React.FC = () => {
               <button 
                 onClick={handleRunAttributionNow}
                 disabled={isAnalyzing}
-                className="bg-indigo-600 px-8 py-4 rounded-2xl font-black hover:bg-indigo-500 disabled:opacity-50 text-xs uppercase tracking-widest flex items-center gap-3 transition-all"
+                className="bg-indigo-600 text-white px-8 py-4 rounded-2xl font-black hover:bg-indigo-700 disabled:opacity-50 text-xs uppercase tracking-widest flex items-center gap-3 transition-all shadow-lg shadow-indigo-600/10"
               >
                 {isAnalyzing ? "Processing..." : "Run IQ Engine"}
               </button>
@@ -221,7 +221,9 @@ const App: React.FC = () => {
           </div>
 
           <MarketChart data={logs} />
-          <AttributionTable logs={logs} onAnalyze={handleRowAnalyze} onViewDetails={setSelectedLog} />
+          <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-xl overflow-hidden">
+            <AttributionTable logs={logs} onAnalyze={handleRowAnalyze} onViewDetails={setSelectedLog} />
+          </div>
         </div>
       ) : (
         <ResearchTab />
@@ -235,9 +237,9 @@ const App: React.FC = () => {
         />
       )}
 
-      <footer className={`py-12 text-center space-y-4 border-t ${activeTab === 'live' ? 'border-slate-900 text-slate-600' : 'border-slate-200 text-slate-400'}`}>
-        <p className="text-[10px] uppercase font-black tracking-[0.5em]">
-          © 2026 Quantitative Intelligence Engine // MBA HPO // Proprietary Layer
+      <footer className="py-16 text-center space-y-4 border-t border-slate-200">
+        <p className="text-[10px] uppercase font-black tracking-[0.5em] text-slate-400">
+          © 2026 Quantitative Intelligence Engine // Proprietary Strategy Layer
         </p>
       </footer>
     </div>
