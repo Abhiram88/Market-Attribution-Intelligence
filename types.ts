@@ -1,6 +1,6 @@
 
-// types.ts
 export type Sentiment = 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL';
+export type MacroCategory = 'Geopolitical' | 'Monetary Policy' | 'Inflation' | 'Earnings' | 'Commodities' | 'Currency' | 'Global Markets' | 'Domestic Policy' | 'Risk-off' | 'Technical' | 'Other';
 
 export interface NewsAttribution {
   headline: string;
@@ -8,7 +8,6 @@ export interface NewsAttribution {
   category: string;
   sentiment: Sentiment;
   relevanceScore: number;
-  // Added sources for search grounding URLs as per guidelines
   sources?: { uri: string; title: string }[];
 }
 
@@ -22,7 +21,32 @@ export interface MarketLog {
   nasdaqChangePercent: number;
   giftNiftyClose: number;
   thresholdMet: boolean;
-  attribution?: NewsAttribution; // Linked via news_attribution table
-  // Added isAnalyzing to track UI state for each log entry
+  attribution?: NewsAttribution;
   isAnalyzing: boolean;
 }
+
+export interface LedgerSource {
+  title: string;
+  url: string;
+  source_name: string;
+  published_at: string;
+  snippet?: string;
+}
+
+export interface LedgerEvent {
+  id: string;
+  event_date: string;
+  nifty_close: number;
+  change_pts: number;
+  reason: string;
+  macro_reason: MacroCategory;
+  sentiment: Sentiment;
+  score: number;
+  ai_attribution_summary: string;
+  llm_raw_json: any;
+  sources?: LedgerSource[];
+  affected_stocks: string[];
+  affected_sectors: string[];
+}
+
+export type AppTab = 'live' | 'research';

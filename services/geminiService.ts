@@ -1,41 +1,27 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { MarketLog, NewsAttribution, Sentiment } from "../types";
+import { MarketLog, NewsAttribution } from "../types";
 import { supabase } from "../lib/supabase";
 
 export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution> => {
-  // Always create a new instance right before making an API call for up-to-date key
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
   const modelId = "gemini-3-pro-preview";
 
+  const isUp = log.niftyChange >= 0;
+  const direction = isUp ? "UP (BULLISH)" : "DOWN (BEARISH)";
+
   const prompt = `
-    You are a world-class senior quantitative financial analyst and macro strategist.
+    You are a world-class senior quantitative financial analyst.
     
     Context for ${log.date}:
-    - Nifty 50 Index (^NSEI) Close: ${log.niftyClose}
-    - Nifty 50 Change: ${log.niftyChange > 0 ? '+' : ''}${log.niftyChange} points (${log.niftyChangePercent}%)
-    - NASDAQ Composite (^IXIC) Change: ${log.nasdaqChangePercent}%
-    - GIFT Nifty: ${log.giftNiftyClose}
+    - Nifty 50 Index was ${direction} by ${Math.abs(log.niftyChange).toFixed(2)} points (${log.niftyChangePercent}%).
     
-    CRITICAL TASK:
-    Perform an exhaustive, multi-layered causal attribution analysis. 
+    TASK:
+    Analyze the market conditions for this date using Google Search.
+    Your summary MUST explain the ${direction} movement. 
+    If the index fell, highlight the negative drivers. If it rose, highlight the positive drivers.
     
-    1. SEARCH: Use Google Search to find the most significant financial developments affecting Indian markets on ${log.date}. Specifically look for:
-       - Geopolitical escalations (trade wars, tariff threats, conflicts).
-       - Global macro data (Fed comments, US inflation, Treasury yields).
-       - Institutional flows (FII/DII net data).
-       - Sector-specific shocks (Metal, IT, Energy, Banking).
-    
-    2. REASON: Use your thinking capabilities to connect these events to the ${log.niftyChangePercent}% move in the Nifty 50.
-    
-    3. SUMMARY: Provide a COMPREHENSIVE and DETAILED analysis. 
-       - Aim for at least 250 words.
-       - Do NOT truncate. 
-       - Mention specific stock names (e.g., Hindalco, ONGC, TCS) and their price movements if relevant.
-       - Include FII outflow/inflow figures if available.
-       - Explain the "Why" behind the "What".
-    
-    4. HEADLINE: Create a factual, heavy-hitting headline summarizing the core narrative.
+    Response must be professional, exhaustive (min 250 words), and include relevant sector/stock impacts.
   `;
 
   try {
@@ -45,16 +31,16 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
       config: {
         tools: [{ googleSearch: {} }],
         thinkingConfig: { thinkingBudget: 4000 },
-        maxOutputTokens: 8000, // Ensure there's plenty of room for the full summary
+        maxOutputTokens: 8000,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            headline: { type: Type.STRING, description: "Detailed summary headline" },
-            summary: { type: Type.STRING, description: "Full exhaustive professional summary (minimum 250 words)" },
+            headline: { type: Type.STRING },
+            summary: { type: Type.STRING },
             category: { type: Type.STRING, enum: ["Macro", "Global", "Corporate", "Geopolitical"] },
             sentiment: { type: Type.STRING, enum: ["POSITIVE", "NEGATIVE", "NEUTRAL"] },
-            relevanceScore: { type: Type.NUMBER, description: "Relevance score from 0 to 1" }
+            relevanceScore: { type: Type.NUMBER }
           },
           required: ["headline", "summary", "category", "sentiment", "relevanceScore"]
         }
@@ -68,11 +54,15 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
     })).filter((s: any) => s.uri) || [];
 
     const result = JSON.parse(response.text || "{}");
+    
+    // Forced alignment logic
+    const validatedSentiment = isUp ? 'POSITIVE' : 'NEGATIVE';
+
     const attribution: NewsAttribution = {
-      headline: result.headline || "Market Dynamic Analysis",
-      summary: result.summary || "Detailed analysis is being compiled from real-time financial telemetry.",
+      headline: result.headline || "Market Dynamics Report",
+      summary: result.summary || "Attribution data stream interrupted. Re-analyzing telemetry...",
       category: (result.category as any) || "Macro",
-      sentiment: (result.sentiment as any) || 'NEUTRAL',
+      sentiment: validatedSentiment,
       relevanceScore: result.relevanceScore || 1.0,
       sources
     };
@@ -100,11 +90,7 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
 
     return attribution;
   } catch (error: any) {
-    console.error("Gemini Analysis Pipeline Error:", error);
-    if (error.message?.includes("Requested entity was not found")) {
-      // This might indicate an API key issue, handled by the UI refresh logic
-      throw new Error("API_KEY_ERROR");
-    }
+    console.error("Gemini Pipeline Failure:", error);
     throw error;
   }
 };
