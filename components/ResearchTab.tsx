@@ -10,8 +10,11 @@ export const ResearchTab: React.FC = () => {
   const [syncStatus, setSyncStatus] = useState({ status: 'idle', progress_message: 'Standby' });
   const [selectedEvent, setSelectedEvent] = useState<LedgerEvent | null>(null);
 
-  // Filters
+  // Advanced Filters
   const [macroFilter, setMacroFilter] = useState<string>("All");
+  const [sentimentFilter, setSentimentFilter] = useState<string>("All");
+  const [scoreFilter, setScoreFilter] = useState<string>("All");
+  const [sectorFilter, setSectorFilter] = useState<string>("All");
   const [searchQuery, setSearchQuery] = useState("");
 
   const fetchEvents = async () => {
@@ -64,23 +67,44 @@ export const ResearchTab: React.FC = () => {
     setSyncStatus({ status: 'idle', progress_message: 'Emergency Stop Signal Sent...' });
   };
 
+  // Derive unique sectors for filtering
+  const allSectors = useMemo(() => {
+    const sectors = new Set<string>();
+    events.forEach(e => {
+      if (Array.isArray(e.affected_sectors)) {
+        e.affected_sectors.forEach(s => sectors.add(s));
+      }
+    });
+    return Array.from(sectors).sort();
+  }, [events]);
+
   const filteredEvents = useMemo(() => {
     const q = searchQuery.toLowerCase();
     return events.filter(e => {
-      const m = macroFilter === "All" || e.macro_reason === macroFilter;
+      const matchesMacro = macroFilter === "All" || e.macro_reason === macroFilter;
+      const matchesSentiment = sentimentFilter === "All" || e.sentiment === sentimentFilter;
+      
+      let matchesScore = true;
+      if (scoreFilter === "High") matchesScore = (e.score || 0) >= 70;
+      else if (scoreFilter === "Med") matchesScore = (e.score || 0) >= 30 && (e.score || 0) < 70;
+      else if (scoreFilter === "Low") matchesScore = (e.score || 0) < 30;
+
+      const matchesSector = sectorFilter === "All" || (e.affected_sectors && e.affected_sectors.includes(sectorFilter));
+
       const reason = (e.reason || "").toLowerCase();
       const summary = (e.ai_attribution_summary || "").toLowerCase();
       const matchesSearch = reason.includes(q) || summary.includes(q);
-      return m && matchesSearch;
+
+      return matchesMacro && matchesSentiment && matchesScore && matchesSector && matchesSearch;
     });
-  }, [events, macroFilter, searchQuery]);
+  }, [events, macroFilter, sentimentFilter, scoreFilter, sectorFilter, searchQuery]);
 
   return (
     <div className="bg-white min-h-screen text-slate-900 rounded-t-[2.5rem] mt-4 p-8 md:p-12 shadow-2xl relative overflow-hidden animate-in fade-in duration-500">
       <div className="max-w-7xl mx-auto space-y-12">
         <div className="flex flex-col md:flex-row justify-between items-center gap-8">
           <div className="space-y-2 text-center md:text-left">
-            <h2 className="text-4xl font-black uppercase tracking-tighter">Intelligence Ledger</h2>
+            <h2 className="text-4xl font-black uppercase tracking-tighter text-slate-900">Intelligence Ledger</h2>
             <div className="flex items-center gap-3 justify-center md:justify-start">
               <span className={`w-2.5 h-2.5 rounded-full ${
                 syncStatus.status === 'running' ? 'bg-amber-500 animate-pulse' : 
@@ -121,27 +145,74 @@ export const ResearchTab: React.FC = () => {
           </div>
         </div>
 
-        <div className="bg-slate-50 p-8 rounded-[2.5rem] border border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-8 items-center">
-          <input 
-            type="text" 
-            placeholder="Filter Ledger Reasons..." 
-            className="bg-white rounded-2xl px-6 py-4 text-sm border-none shadow-sm focus:ring-2 ring-indigo-500/20 transition-all font-medium placeholder:text-slate-300"
-            onChange={e => setSearchQuery(e.target.value)}
-          />
-          <select 
-            className="bg-white rounded-2xl px-6 py-4 text-sm border-none shadow-sm font-black uppercase tracking-wider"
-            onChange={e => setMacroFilter(e.target.value)}
-          >
-            <option value="All">All Macro Themes</option>
-            {['Geopolitical', 'Monetary Policy', 'Inflation', 'Earnings', 'Commodities', 'Global Markets'].map(m => (
-              <option key={m} value={m}>{m}</option>
-            ))}
-          </select>
-          <div className="flex items-center justify-end gap-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">
-            Total Validated: {events.filter(e => {
-              const summary = e.ai_attribution_summary || "";
-              return summary.length > 100 && !summary.includes('pending');
-            }).length} / {events.length}
+        {/* Dynamic Filter Engine */}
+        <div className="bg-slate-50 p-8 rounded-[2.5rem] border border-slate-100 space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="space-y-1">
+              <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Search Keywords</label>
+              <input 
+                type="text" 
+                placeholder="Stocks, Reasons..." 
+                className="w-full bg-white rounded-xl px-5 py-3.5 text-xs border-none shadow-sm focus:ring-2 ring-indigo-500/20 transition-all font-medium placeholder:text-slate-300"
+                onChange={e => setSearchQuery(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Macro Theme</label>
+              <select 
+                className="w-full bg-white rounded-xl px-5 py-3.5 text-xs border-none shadow-sm font-black uppercase tracking-wider cursor-pointer"
+                onChange={e => setMacroFilter(e.target.value)}
+              >
+                <option value="All">All Macro Themes</option>
+                {['Geopolitical', 'Monetary Policy', 'Inflation', 'Earnings', 'Commodities', 'Global Markets', 'Domestic Policy', 'Risk-off', 'Technical', 'Other'].map(m => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Market Sentiment</label>
+              <select 
+                className="w-full bg-white rounded-xl px-5 py-3.5 text-xs border-none shadow-sm font-black uppercase tracking-wider cursor-pointer"
+                onChange={e => setSentimentFilter(e.target.value)}
+              >
+                <option value="All">All Sentiment</option>
+                <option value="POSITIVE">Positive</option>
+                <option value="NEGATIVE">Negative</option>
+                <option value="NEUTRAL">Neutral</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Impact Sector</label>
+              <select 
+                className="w-full bg-white rounded-xl px-5 py-3.5 text-xs border-none shadow-sm font-black uppercase tracking-wider cursor-pointer"
+                onChange={e => setSectorFilter(e.target.value)}
+              >
+                <option value="All">All Sectors</option>
+                {allSectors.map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          
+          <div className="flex items-center justify-between pt-4 border-t border-slate-200">
+            <div className="flex gap-4">
+              <button 
+                onClick={() => setScoreFilter(scoreFilter === 'High' ? 'All' : 'High')}
+                className={`px-4 py-2 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${scoreFilter === 'High' ? 'bg-indigo-600 text-white shadow-lg' : 'bg-white text-slate-400 hover:text-slate-900 border border-slate-200'}`}
+              >
+                High Impact Only
+              </button>
+              <button 
+                onClick={() => setScoreFilter(scoreFilter === 'Med' ? 'All' : 'Med')}
+                className={`px-4 py-2 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${scoreFilter === 'Med' ? 'bg-amber-500 text-white shadow-lg' : 'bg-white text-slate-400 hover:text-slate-900 border border-slate-200'}`}
+              >
+                Medium Impact
+              </button>
+            </div>
+            <div className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">
+              Matches: <span className="text-slate-900 font-black">{filteredEvents.length} Records</span>
+            </div>
           </div>
         </div>
 

@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { LedgerEvent } from '../types';
 
@@ -10,72 +9,106 @@ interface ResearchTableProps {
 export const ResearchTable: React.FC<ResearchTableProps> = ({ events, onViewDetails }) => {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-left text-sm border-collapse min-w-[900px]">
-        <thead className="bg-slate-50 text-slate-400 uppercase text-[10px] font-black tracking-[0.2em] border-b border-slate-100">
+      <table className="w-full text-left text-sm border-collapse min-w-[1400px]">
+        <thead className="bg-slate-50 text-slate-400 uppercase text-[9px] font-black tracking-[0.2em] border-b border-slate-100">
           <tr>
-            <th className="px-10 py-7">Timestamp</th>
-            <th className="px-10 py-7">Nifty Close</th>
-            <th className="px-10 py-7">Change (Pts)</th>
-            <th className="px-10 py-7">AI Attribution Summary</th>
-            <th className="px-10 py-7 text-right">Action</th>
+            <th className="px-8 py-6">Event Date</th>
+            <th className="px-8 py-6">Nifty Close</th>
+            <th className="px-8 py-6">% Change (pts)</th>
+            <th className="px-8 py-6">Reason (Summary)</th>
+            <th className="px-8 py-6">Macro Driver</th>
+            <th className="px-8 py-6 text-center">Score</th>
+            <th className="px-8 py-6">Impacted Sectors</th>
+            <th className="px-8 py-6 text-right">Action</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-50">
           {events.length === 0 ? (
             <tr>
-              <td colSpan={5} className="px-10 py-32 text-center">
-                <p className="font-black uppercase tracking-widest text-xs text-slate-300">No Data Available</p>
+              <td colSpan={8} className="px-10 py-32 text-center text-slate-300 font-black uppercase tracking-widest text-xs">
+                Ledger empty. Run 'Verified Audit' to shortlist high-volatility events from Jan 2024.
               </td>
             </tr>
           ) : (
-            events.map((e) => (
-              <tr key={e.id} className="hover:bg-indigo-50/20 transition-all group">
-                <td className="px-10 py-8">
-                  <span className="font-mono text-[11px] text-slate-500 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200">
-                    {e.event_date}
-                  </span>
-                </td>
-                <td className="px-10 py-8">
-                  <span className="text-base font-black text-slate-900 tracking-tight">
-                    {e.nifty_close.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                  </span>
-                </td>
-                <td className={`px-10 py-8 font-black text-sm`}>
-                  <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border ${e.change_pts >= 0 ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'}`}>
-                    <span className="text-[10px]">{e.change_pts > 0 ? '▲' : '▼'}</span>
-                    {Math.abs(e.change_pts).toFixed(1)}
-                  </div>
-                </td>
-                <td className="px-10 py-8 max-w-xl">
-                  <div className="flex flex-wrap items-center gap-3 mb-3">
-                    <span className="text-[9px] font-black uppercase bg-slate-900 text-white px-3 py-1 rounded-lg">
-                      {e.macro_reason}
+            events.map((e) => {
+              const prevClose = e.nifty_close - e.change_pts;
+              const percentChange = (e.change_pts / prevClose) * 100;
+              const isPositive = e.change_pts >= 0;
+
+              return (
+                <tr key={e.id} className="hover:bg-slate-50/80 transition-all group border-b border-slate-50 last:border-0">
+                  <td className="px-8 py-6">
+                    <span className="flex items-center gap-2 text-[10px] font-black text-slate-900 bg-white border border-slate-200 px-3 py-1.5 rounded-lg uppercase tracking-widest shadow-sm">
+                      {e.event_date}
                     </span>
-                    <span className={`text-[9px] font-black uppercase flex items-center gap-1.5 ${
-                      e.sentiment === 'POSITIVE' ? 'text-emerald-600' : 
-                      e.sentiment === 'NEGATIVE' ? 'text-rose-600' : 'text-slate-400'
-                    }`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${e.sentiment === 'POSITIVE' ? 'bg-emerald-500' : e.sentiment === 'NEGATIVE' ? 'bg-rose-500' : 'bg-slate-300'}`}></span>
-                      {e.sentiment}
+                  </td>
+                  <td className="px-8 py-6">
+                    <span className="text-sm font-black text-slate-900 tracking-tighter">
+                      {e.nifty_close.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                     </span>
-                  </div>
-                  <h4 className="text-slate-900 font-black text-[13px] leading-snug mb-2 group-hover:text-indigo-600 transition-colors">
-                    {e.reason}
-                  </h4>
-                  <p className="text-[12px] text-slate-500 leading-relaxed font-medium line-clamp-2">
-                    {e.ai_attribution_summary}
-                  </p>
-                </td>
-                <td className="px-10 py-8 text-right">
-                  <button 
-                    onClick={() => onViewDetails(e)}
-                    className="inline-flex items-center gap-3 bg-slate-900 text-white hover:bg-indigo-600 px-6 py-3 rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] transition-all"
-                  >
-                    Details
-                  </button>
-                </td>
-              </tr>
-            ))
+                  </td>
+                  <td className="px-8 py-6">
+                    <div className="inline-flex flex-col gap-0.5 font-black">
+                      <span className={`text-[11px] flex items-center gap-1 ${isPositive ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {isPositive ? '▲' : '▼'} {Math.abs(percentChange).toFixed(2)}%
+                      </span>
+                      <span className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter">
+                        ({isPositive ? '+' : '-'}{Math.abs(e.change_pts).toFixed(1)} pts)
+                      </span>
+                    </div>
+                  </td>
+                  <td className="px-8 py-6 max-w-sm">
+                    <div className="space-y-1">
+                      <p className="text-slate-800 font-bold text-[11.5px] leading-tight uppercase tracking-tight group-hover:text-indigo-600 transition-colors line-clamp-2">
+                        {e.reason || "Shortlisted: Awaiting Attribution"}
+                      </p>
+                      {e.ai_attribution_summary && (
+                        <button 
+                          onClick={() => onViewDetails(e)} 
+                          className="text-[9px] font-black text-indigo-500 uppercase tracking-[0.2em] hover:text-indigo-700 transition-colors flex items-center gap-1 mt-1"
+                        >
+                          Read Full Intelligence Report
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor" className="w-2.5 h-2.5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-8 py-6">
+                    <span className="text-[8px] font-black uppercase bg-indigo-50 text-indigo-600 border border-indigo-100 px-3 py-1 rounded-md tracking-widest">
+                      {e.macro_reason || "OTHER"}
+                    </span>
+                  </td>
+                  <td className="px-8 py-6 text-center">
+                    <div className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-slate-900 text-white text-[10px] font-black shadow-lg shadow-slate-900/10">
+                      {e.score || 0}
+                    </div>
+                  </td>
+                  <td className="px-8 py-6">
+                    <div className="flex flex-wrap gap-1.5 max-w-[180px]">
+                      {e.affected_sectors && e.affected_sectors.length > 0 ? (
+                        e.affected_sectors.slice(0, 3).map((s, idx) => (
+                          <span key={idx} className="text-[8px] font-bold text-slate-500 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md uppercase">
+                            {s}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-[8px] text-slate-300 font-bold italic uppercase">Pending...</span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-8 py-6 text-right">
+                    <button 
+                      onClick={() => onViewDetails(e)}
+                      className="inline-flex items-center gap-2 bg-slate-900 hover:bg-indigo-600 text-white px-6 py-3 rounded-xl font-black text-[9px] uppercase tracking-[0.2em] transition-all shadow-xl shadow-slate-900/10"
+                    >
+                      Dossier
+                    </button>
+                  </td>
+                </tr>
+              );
+            })
           )}
         </tbody>
       </table>

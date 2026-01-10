@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { MarketLog, NewsAttribution } from "../types";
 import { supabase } from "../lib/supabase";
@@ -47,13 +46,16 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
       }
     });
 
+    const text = response.text;
+    if (!text) throw new Error("Telemetry analysis yielded no results.");
+
     const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
     const sources = groundingChunks?.map((chunk: any) => ({
       uri: chunk.web?.uri,
       title: chunk.web?.title
     })).filter((s: any) => s.uri) || [];
 
-    const result = JSON.parse(response.text || "{}");
+    const result = JSON.parse(text || "{}");
     
     // Forced alignment logic
     const validatedSentiment = isUp ? 'POSITIVE' : 'NEGATIVE';
@@ -91,6 +93,12 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
     return attribution;
   } catch (error: any) {
     console.error("Gemini Pipeline Failure:", error);
+    
+    const errorMsg = error?.message || "";
+    if (errorMsg.includes("429") || errorMsg.includes("RESOURCE_EXHAUSTED") || errorMsg.includes("quota")) {
+      throw new Error("QUOTA_EXCEEDED: The Daily Attribution Engine has reached its search limit. No more reports can be generated until tomorrow.");
+    }
+    
     throw error;
   }
 };

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { LedgerEvent } from '../types';
-import { generateVerifiedIntelligence, commitIntelligenceToLedger } from '../services/researchService';
+import { generateVerifiedIntelligence, commitIntelligenceToLedger, verifyHistoricalTelemetry } from '../services/researchService';
 
 interface ResearchDetailModalProps {
   event: LedgerEvent;
@@ -18,10 +18,12 @@ export const ResearchDetailModal: React.FC<ResearchDetailModalProps> = ({ event:
     setIsProcessing(true);
     setError(null);
     try {
-      const intelligence = await generateVerifiedIntelligence(event.event_date, event.change_pts);
+      const telemetry = await verifyHistoricalTelemetry(event.event_date);
+      if (!telemetry) throw new Error("Verification Failed: Market connectivity lost or date invalid.");
+      
+      const intelligence = await generateVerifiedIntelligence(event.event_date, telemetry.change);
       if (intelligence) {
         setDraftIntelligence(intelligence);
-        // Temporarily update UI preview
         setEvent(prev => ({
           ...prev,
           reason: intelligence.reason,
@@ -31,12 +33,11 @@ export const ResearchDetailModal: React.FC<ResearchDetailModalProps> = ({ event:
           ai_attribution_summary: intelligence.ai_attribution_summary,
           affected_stocks: intelligence.affected_stocks || [],
           affected_sectors: intelligence.affected_sectors || [],
-          sources: intelligence.sources_used,
-          llm_raw_json: intelligence
+          sources: intelligence.sources_used
         }));
       }
     } catch (err: any) {
-      setError(err.message === "QUOTA_EXCEEDED" ? "Daily search quota reached." : "Analysis verification failed. Try once more?");
+      setError(`Engine Error: ${err.message}`);
     } finally {
       setIsProcessing(false);
     }
@@ -45,211 +46,152 @@ export const ResearchDetailModal: React.FC<ResearchDetailModalProps> = ({ event:
   const handleCommitUpdate = async () => {
     if (!draftIntelligence) return;
     setIsProcessing(true);
-    setError(null);
     try {
-      const updatedEvent = await commitIntelligenceToLedger(
-        event.event_date, 
-        event.nifty_close, 
-        event.change_pts, 
-        draftIntelligence
-      );
-      if (updatedEvent) {
-        setEvent(updatedEvent);
-        setDraftIntelligence(null); // Clear draft state after commit
-        if (onUpdate) onUpdate();
-      }
+      const updated = await commitIntelligenceToLedger(event.event_date, event.nifty_close, event.change_pts, draftIntelligence);
+      setEvent(updated);
+      setDraftIntelligence(null);
+      if (onUpdate) onUpdate();
     } catch (err: any) {
-      setError(`Database Update Failed: ${err.message}`);
+      setError(`Ledger Fault: ${err.message}`);
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const reasonText = event.reason || "";
-  const summaryText = event.ai_attribution_summary || "";
-
-  const isPlaceholder = !draftIntelligence && (
-                        reasonText.includes("Market") || 
-                        summaryText.includes("pending") || 
-                        summaryText.includes("Partial recovery") ||
-                        summaryText.length < 100);
-
-  const isPositive = event.change_pts >= 0;
+  const isPositive = (event.change_pts || 0) >= 0;
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-end bg-slate-950/40 backdrop-blur-sm animate-in fade-in duration-300">
-      <div 
-        className="fixed inset-0 cursor-pointer" 
-        onClick={onClose}
-      />
+    <div className="fixed inset-0 z-[60] flex items-center justify-end bg-slate-900/40 backdrop-blur-md animate-in fade-in duration-300">
+      <div className="fixed inset-0 cursor-pointer" onClick={onClose} />
       
-      <div className="bg-white w-full max-w-xl h-full shadow-2xl animate-in slide-in-from-right duration-500 overflow-y-auto flex flex-col relative z-10">
+      <div className="bg-white w-full max-w-2xl h-full shadow-2xl animate-in slide-in-from-right duration-500 overflow-y-auto flex flex-col relative z-10">
         
-        {/* Header Navigation */}
-        <div className="p-8 border-b border-slate-100 flex justify-between items-start bg-slate-50/50 sticky top-0 z-20 backdrop-blur-md">
+        {/* EVENT SNAPSHOT HEADER */}
+        <div className="p-10 flex justify-between items-start bg-white sticky top-0 z-20 border-b border-slate-50">
           <div className="space-y-1">
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Event Snapshot</p>
-            <h2 className="text-3xl font-black text-slate-900 tracking-tighter uppercase">{event.event_date}</h2>
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Event Snapshot</p>
+            <h2 className="text-4xl font-black text-slate-900 tracking-tighter uppercase">{event.event_date}</h2>
           </div>
           <button 
             onClick={onClose} 
-            className="p-3 bg-white hover:bg-slate-100 rounded-2xl transition-all text-slate-400 hover:text-slate-900 border border-slate-200"
+            className="p-3 bg-slate-50 hover:bg-slate-100 rounded-full transition-all text-slate-400 hover:text-slate-900 border border-slate-100"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-5 h-5">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor" className="w-5 h-5">
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
         </div>
 
-        <div className="p-8 space-y-10 flex-1">
-          {/* Quick Stats Grid */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="p-6 bg-slate-50 rounded-[2rem] border border-slate-100 space-y-1">
-              <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Nifty Close</p>
-              <p className="text-2xl font-black text-slate-900">{event.nifty_close?.toLocaleString(undefined, { minimumFractionDigits: 1 }) || '0.0'}</p>
+        <div className="px-10 pb-10 space-y-12">
+          
+          {/* PROMINENT METRICS */}
+          <div className="grid grid-cols-2 gap-6">
+            <div className="p-8 bg-slate-50 rounded-[2.5rem] space-y-2 border border-slate-100 shadow-sm">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Nifty Close</p>
+              <p className="text-4xl font-black text-slate-900 tracking-tighter">
+                {event.nifty_close?.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              </p>
             </div>
-            <div className={`p-6 rounded-[2rem] border space-y-1 ${isPositive ? 'bg-emerald-50 border-emerald-100 text-emerald-600' : 'bg-rose-50 border-rose-100 text-rose-600'}`}>
-              <p className="text-[9px] font-black opacity-60 uppercase tracking-widest">Volatility</p>
-              <p className="text-2xl font-black">{isPositive ? '+' : ''}{(event.change_pts || 0).toFixed(1)}</p>
+            <div className={`p-8 rounded-[2.5rem] space-y-2 border ${isPositive ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'} shadow-sm`}>
+              <p className="text-[10px] font-black opacity-60 uppercase tracking-widest">Volatility</p>
+              <p className="text-4xl font-black tracking-tighter">
+                {isPositive ? '+' : '-'}{Math.abs(event.change_pts || 0).toFixed(1)}
+              </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-4 items-center">
-             <div className="flex items-center gap-2 px-4 py-2 bg-slate-900 rounded-xl text-white text-[10px] font-black uppercase tracking-widest">
-               Impact Score: {event.score || 0}
-             </div>
-             <div className="px-4 py-2 bg-slate-100 rounded-xl text-slate-500 text-[10px] font-black uppercase tracking-widest border border-slate-200">
-               {event.macro_reason || 'OTHER'}
-             </div>
+          {/* CLASSIFICATION BADGES */}
+          <div className="flex flex-wrap gap-3">
+            <div className="px-6 py-3 bg-slate-900 rounded-xl text-white text-[10px] font-black uppercase tracking-[0.2em] shadow-lg shadow-slate-900/10">
+              Impact Score: {event.score || 0}
+            </div>
+            <div className="px-6 py-3 bg-slate-100 rounded-xl text-slate-500 text-[10px] font-black uppercase tracking-[0.2em] border border-slate-200">
+              {event.macro_reason || 'MACRO'}
+            </div>
+            <div className={`px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] border ${
+              event.sentiment === 'POSITIVE' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'
+            }`}>
+              {event.sentiment || 'NEUTRAL'}
+            </div>
           </div>
 
-          {/* Main Attribution Section */}
-          <div className="space-y-6">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          {/* CAUSAL ANALYSIS BODY */}
+          <div className="space-y-8">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-4">
               <h3 className="text-2xl font-black text-slate-900 uppercase tracking-tight">Causal Analysis</h3>
+              <button 
+                onClick={handleDeepAnalyze} 
+                disabled={isProcessing} 
+                className="bg-slate-100 hover:bg-slate-200 text-slate-400 hover:text-slate-600 px-6 py-3 rounded-2xl font-black text-[9px] uppercase tracking-widest transition-all border border-slate-200"
+              >
+                {isProcessing ? "Auditing..." : "Re-Analyze"}
+              </button>
+            </div>
+
+            {error && <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl text-rose-600 text-xs font-bold">{error}</div>}
+
+            <div className={`space-y-8 ${isProcessing ? 'opacity-30' : ''} transition-opacity duration-500`}>
+              <div className="space-y-4">
+                <h1 className="text-3xl font-black leading-tight text-slate-900 uppercase tracking-tight">
+                  {event.reason || "Shortlist verified. Awaiting deep intelligence run."}
+                </h1>
+                <div className="prose prose-slate max-w-none">
+                  <p className="text-lg leading-relaxed font-medium text-slate-600 whitespace-pre-wrap">
+                    {event.ai_attribution_summary || "Audit results pending. Use the Re-Analyze tool above to trigger the 250+ word deep causal attribution engine for this volatility event."}
+                  </p>
+                </div>
+              </div>
               
-              {!draftIntelligence ? (
+              {draftIntelligence && (
                 <button 
-                  onClick={handleDeepAnalyze}
-                  disabled={isProcessing}
-                  className={`flex items-center justify-center gap-3 px-6 py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all shadow-lg active:scale-95 border ${
-                    isProcessing 
-                      ? 'bg-indigo-100 text-indigo-500 animate-pulse border-indigo-200' 
-                      : isPlaceholder 
-                        ? 'bg-indigo-600 text-white hover:bg-indigo-700 border-indigo-500' 
-                        : 'bg-slate-100 text-slate-400 border-slate-200 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200'
-                  }`}
+                  onClick={handleCommitUpdate} 
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-5 rounded-[1.5rem] font-black uppercase tracking-[0.2em] text-xs shadow-xl transition-all active:scale-95"
                 >
-                  {isProcessing ? (
-                    <>
-                      <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      Synthesizing...
-                    </>
-                  ) : isPlaceholder ? "Deep Analyze" : "Re-Analyze"}
-                </button>
-              ) : (
-                <button 
-                  onClick={handleCommitUpdate}
-                  disabled={isProcessing}
-                  className={`flex items-center justify-center gap-3 px-6 py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all shadow-xl active:scale-95 border bg-emerald-600 text-white hover:bg-emerald-700 border-emerald-500 animate-in zoom-in-95 duration-200`}
-                >
-                  {isProcessing ? (
-                    <>
-                      <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      Updating...
-                    </>
-                  ) : (
-                    <>
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-                        <path fillRule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm3.857-9.809a.75.75 0 0 0-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 1 0-1.06 1.061l2.5 2.5a.75.75 0 0 0 1.137-.089l4-5.5Z" clipRule="evenodd" />
-                      </svg>
-                      Update Intelligence Table
-                    </>
-                  )}
+                  Commit Deep Analysis to Ledger
                 </button>
               )}
             </div>
+          </div>
 
-            {error && (
-              <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl text-rose-600 text-xs font-bold animate-in fade-in slide-in-from-top-2">
-                {error}
+          {/* IMPACT GRIDS */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-10 pt-10 border-t border-slate-100">
+            <div className="space-y-4">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Impacted Sectors</p>
+              <div className="flex flex-wrap gap-2">
+                {event.affected_sectors?.length ? event.affected_sectors.map(s => (
+                  <span key={s} className="px-4 py-2 bg-slate-50 text-slate-600 text-[10px] font-bold rounded-xl border border-slate-200 uppercase tracking-tight">{s}</span>
+                )) : <span className="text-[10px] text-slate-300 font-bold italic">N/A</span>}
               </div>
-            )}
-
-            <div className={`space-y-6 transition-opacity duration-300 ${isProcessing ? 'opacity-40' : 'opacity-100'}`}>
-              <h1 className={`text-3xl font-black leading-tight tracking-tight ${isPlaceholder ? 'text-slate-300' : 'text-slate-900'} ${draftIntelligence ? 'text-indigo-600' : ''}`}>
-                {reasonText || "Analysis Required"}
-              </h1>
-              
-              <div className="prose prose-slate max-w-none">
-                <p className={`text-base leading-relaxed font-medium whitespace-pre-wrap ${isPlaceholder ? 'text-slate-400 italic' : 'text-slate-600'}`}>
-                  {summaryText || "Intelligence layer not yet populated for this date."}
-                </p>
+            </div>
+            <div className="space-y-4">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Impacted Stocks</p>
+              <div className="flex flex-wrap gap-2">
+                {event.affected_stocks?.length ? event.affected_stocks.map(s => (
+                  <span key={s} className="px-4 py-2 bg-slate-900 text-white text-[10px] font-black rounded-xl uppercase tracking-widest shadow-lg shadow-slate-900/10">{s}</span>
+                )) : <span className="text-[10px] text-slate-300 font-bold italic">N/A</span>}
               </div>
             </div>
           </div>
 
-          {/* Sector & Stock Impacts */}
-          {(event.affected_sectors?.length > 0 || event.affected_stocks?.length > 0) && (
-             <div className="grid grid-cols-2 gap-8 py-10 border-t border-slate-100">
-                <div className="space-y-4">
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Impacted Sectors</p>
-                  <div className="flex flex-wrap gap-2">
-                    {event.affected_sectors.map(s => (
-                      <span key={s} className="px-3 py-1 bg-slate-100 text-slate-600 text-[10px] font-bold rounded-lg border border-slate-200">{s}</span>
-                    ))}
-                  </div>
-                </div>
-                <div className="space-y-4">
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Impacted Stocks</p>
-                  <div className="flex flex-wrap gap-2">
-                    {event.affected_stocks.map(s => (
-                      <span key={s} className="px-3 py-1 bg-slate-900 text-white text-[10px] font-black rounded-lg">{s}</span>
-                    ))}
-                  </div>
-                </div>
-             </div>
-          )}
-
-          {/* Sources / Grounding */}
-          {event.sources && event.sources.length > 0 && (
+          {/* CITATIONS */}
+          {event.sources?.length ? (
             <div className="space-y-4 pt-10 border-t border-slate-100">
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Grounding Citations</p>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">Verified Citations</p>
               <div className="grid grid-cols-1 gap-3">
-                {event.sources.map((s, i) => (
-                  <a 
-                    key={i} 
-                    href={s.url} 
-                    target="_blank" 
-                    rel="noopener noreferrer" 
-                    className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100 hover:bg-white hover:border-indigo-200 hover:shadow-md transition-all group"
-                  >
+                {event.sources.map((s: any, i: number) => (
+                  <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" className="flex items-center justify-between p-5 bg-slate-50 rounded-[1.5rem] border border-slate-100 hover:bg-white hover:border-indigo-200 hover:shadow-xl transition-all group">
                     <div className="space-y-0.5">
                       <p className="text-xs font-black text-slate-900 line-clamp-1">{s.title}</p>
-                      <p className="text-[10px] font-bold text-slate-400 group-hover:text-indigo-400 uppercase tracking-tighter transition-colors">{s.source_name || 'Primary Source'}</p>
+                      <p className="text-[10px] font-bold text-slate-400 group-hover:text-indigo-500 uppercase tracking-widest">{s.source_name || 'Verified Source'}</p>
                     </div>
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4 text-slate-300 group-hover:text-indigo-500 transition-colors">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor" className="w-4 h-4 text-slate-300 group-hover:text-indigo-500 transition-colors">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
                     </svg>
                   </a>
                 ))}
               </div>
             </div>
-          )}
-
-          {/* Internal Traceability */}
-          <div className="pt-10 border-t border-slate-100 space-y-4">
-             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Internal Traceability (Raw LLM Output)</p>
-             <pre className="bg-slate-900 text-indigo-300 text-[10px] p-6 rounded-2xl overflow-x-auto border border-slate-800 font-mono leading-relaxed">
-               {JSON.stringify(event.llm_raw_json || {}, null, 2)}
-             </pre>
-          </div>
+          ) : null}
         </div>
       </div>
     </div>
