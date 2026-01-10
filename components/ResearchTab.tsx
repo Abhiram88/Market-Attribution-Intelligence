@@ -1,20 +1,19 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { LedgerEvent } from '../types';
 import { ResearchTable } from './ResearchTable';
 import { ResearchDetailModal } from './ResearchDetailModal';
-import { runDeepResearch, stopDeepResearch } from '../services/researchService';
+import { runDeepResearch, stopDeepResearch, seedVolatileQueue } from '../services/researchService';
 
 export const ResearchTab: React.FC = () => {
   const [events, setEvents] = useState<LedgerEvent[]>([]);
   const [syncStatus, setSyncStatus] = useState({ status: 'idle', progress_message: 'Standby' });
   const [selectedEvent, setSelectedEvent] = useState<LedgerEvent | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Advanced Filters
   const [macroFilter, setMacroFilter] = useState<string>("All");
   const [sentimentFilter, setSentimentFilter] = useState<string>("All");
-  const [scoreFilter, setScoreFilter] = useState<string>("All");
-  const [sectorFilter, setSectorFilter] = useState<string>("All");
   const [searchQuery, setSearchQuery] = useState("");
 
   const fetchEvents = async () => {
@@ -32,189 +31,153 @@ export const ResearchTab: React.FC = () => {
 
   const checkStatus = async () => {
     try {
-      const { data } = await supabase
-        .from('research_status')
-        .select('*')
-        .eq('id', 1)
-        .maybeSingle();
-      
+      const { data } = await supabase.from('research_status').select('*').eq('id', 1).maybeSingle();
       if (data) {
         setSyncStatus({ status: data.status, progress_message: data.progress_message });
-        if (data.status === 'completed' || data.status === 'failed') {
-          fetchEvents();
-        }
+        if (data.status === 'completed' || data.status === 'failed') fetchEvents();
       }
-    } catch (e) {
-      console.error("Status check failed", e);
-    }
+    } catch (e) { console.error(e); }
   };
 
   useEffect(() => {
     fetchEvents();
     checkStatus();
-    const interval = setInterval(checkStatus, 3000); 
+    const interval = setInterval(checkStatus, 4000); 
     return () => clearInterval(interval);
   }, []);
 
-  const handleRun = async () => {
+  const handleRun = () => {
     if (syncStatus.status === 'running') return;
-    runDeepResearch(); 
-    setSyncStatus({ status: 'running', progress_message: 'Auditing Ledger Integrity...' });
+    runDeepResearch();
+    setSyncStatus({ status: 'running', progress_message: 'Initiating queue audit...' });
   };
 
-  const handleTerminate = async () => {
-    stopDeepResearch();
-    setSyncStatus({ status: 'idle', progress_message: 'Emergency Stop Signal Sent...' });
-  };
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
 
-  const allSectors = useMemo(() => {
-    const sectors = new Set<string>();
-    events.forEach(e => {
-      if (Array.isArray(e.affected_sectors)) {
-        e.affected_sectors.forEach(s => sectors.add(s));
+    setIsUploading(true);
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = event.target?.result as string;
+        const lines = text.split(/\r?\n/);
+        const dates = lines
+          .map(line => line.trim().split(',')[0].replace(/"/g, ''))
+          .filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date));
+        
+        if (dates.length > 0) {
+          try {
+            await seedVolatileQueue(dates);
+            alert(`Success: ${dates.length} dates added to volatile queue.`);
+          } catch (err: any) {
+            if (err.message.includes('volatile_queue')) {
+              alert("DB ERROR: 'volatile_queue' table not found. Please create it using the SQL provided in the instructions.");
+            } else {
+              alert(`Error: ${err.message}`);
+            }
+          }
+        } else {
+          alert("No valid YYYY-MM-DD dates found in the file.");
+        }
+      } catch (err) {
+        alert("File parsing failed.");
+      } finally {
+        setIsUploading(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
       }
-    });
-    return Array.from(sectors).sort();
-  }, [events]);
+    };
+    reader.readAsText(file);
+  };
 
   const filteredEvents = useMemo(() => {
-    const q = searchQuery.toLowerCase();
     return events.filter(e => {
       const matchesMacro = macroFilter === "All" || e.macro_reason === macroFilter;
       const matchesSentiment = sentimentFilter === "All" || e.sentiment === sentimentFilter;
-      
-      let matchesScore = true;
-      if (scoreFilter === "High") matchesScore = (e.score || 0) >= 70;
-      else if (scoreFilter === "Med") matchesScore = (e.score || 0) >= 30 && (e.score || 0) < 70;
-      else if (scoreFilter === "Low") matchesScore = (e.score || 0) < 30;
-
-      const matchesSector = sectorFilter === "All" || (e.affected_sectors && e.affected_sectors.includes(sectorFilter));
-
-      const reason = (e.reason || "").toLowerCase();
-      const summary = (e.ai_attribution_summary || "").toLowerCase();
-      const matchesSearch = reason.includes(q) || summary.includes(q);
-
-      return matchesMacro && matchesSentiment && matchesScore && matchesSector && matchesSearch;
+      const matchesSearch = !searchQuery || 
+        (e.reason || "").toLowerCase().includes(searchQuery.toLowerCase()) || 
+        (e.ai_attribution_summary || "").toLowerCase().includes(searchQuery.toLowerCase());
+      return matchesMacro && matchesSentiment && matchesSearch;
     });
-  }, [events, macroFilter, sentimentFilter, scoreFilter, sectorFilter, searchQuery]);
+  }, [events, macroFilter, sentimentFilter, searchQuery]);
 
   return (
-    <div className="w-full space-y-8 sm:space-y-12 animate-in fade-in duration-500">
+    <div className="w-full space-y-10 animate-in fade-in duration-500">
       <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8">
-        <div className="space-y-2">
-          <h2 className="text-3xl sm:text-4xl font-black uppercase tracking-tighter text-slate-900">Intelligence Ledger</h2>
+        <div>
+          <div className="flex items-center gap-4 mb-2">
+            <h2 className="text-4xl font-black uppercase tracking-tighter">Research Ledger</h2>
+            <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".csv" className="hidden" />
+            <button 
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isUploading}
+              className="p-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all flex items-center gap-2 shadow-lg disabled:opacity-50"
+            >
+              {isUploading ? <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div> : 
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" /></svg>
+              }
+              <span className="text-[10px] font-black uppercase tracking-widest">Import CSV</span>
+            </button>
+          </div>
           <div className="flex items-center gap-3">
-            <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
-              syncStatus.status === 'running' ? 'bg-amber-500 animate-pulse' : 
-              syncStatus.status === 'failed' ? 'bg-rose-500' : 'bg-emerald-500'
-            }`}></span>
-            <p className="text-slate-500 text-[9px] sm:text-[10px] font-black uppercase tracking-widest flex items-center gap-2">
-              System Status
-              <span className="text-slate-300">//</span>
-              <span className="text-slate-900 font-bold tracking-tight truncate max-w-[200px] sm:max-w-none">{syncStatus.progress_message}</span>
+            <span className={`w-2.5 h-2.5 rounded-full ${syncStatus.status === 'running' ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`}></span>
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+              {syncStatus.progress_message}
             </p>
           </div>
         </div>
-        
-        <div className="flex flex-wrap gap-3 sm:gap-4 w-full sm:w-auto">
+
+        <div className="flex gap-4">
           {syncStatus.status === 'running' && (
-            <button 
-              onClick={handleTerminate}
-              className="flex-1 sm:flex-none bg-rose-600 hover:bg-rose-700 text-white px-6 sm:px-8 py-3.5 sm:py-5 rounded-2xl font-black uppercase text-[10px] sm:text-xs tracking-[0.15em] sm:tracking-[0.2em] transition-all shadow-xl active:scale-95 flex items-center justify-center gap-3 animate-in slide-in-from-right"
-            >
-              Stop Engine
-            </button>
+            <button onClick={stopDeepResearch} className="bg-rose-600 text-white px-8 py-4 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-rose-700 transition-all">Stop</button>
           )}
-          
           <button 
             onClick={handleRun}
             disabled={syncStatus.status === 'running'}
-            className="flex-1 sm:flex-none group relative bg-slate-900 hover:bg-indigo-600 disabled:bg-slate-200 text-white px-8 sm:px-10 py-3.5 sm:py-5 rounded-2xl font-black uppercase text-[10px] sm:text-xs tracking-[0.15em] sm:tracking-[0.2em] transition-all shadow-xl active:scale-95 flex items-center justify-center gap-3"
+            className="bg-slate-900 text-white px-10 py-4 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-indigo-600 disabled:bg-slate-200 transition-all shadow-xl"
           >
-            {syncStatus.status === 'running' ? (
-              <>
-                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                Analyzing...
-              </>
-            ) : (
-              "Verified Audit"
-            )}
+            {syncStatus.status === 'running' ? 'Auditing Batch...' : 'Verified Audit'}
           </button>
         </div>
       </div>
 
-      {/* Dynamic Filter Engine - Full Width */}
-      <div className="bg-white p-6 sm:p-8 rounded-2xl sm:rounded-[2.5rem] border border-slate-200 shadow-sm space-y-8">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-          <div className="space-y-1.5">
-            <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Search Keywords</label>
-            <input 
-              type="text" 
-              placeholder="Filter by context..." 
-              className="w-full bg-slate-50 rounded-xl px-5 py-3.5 text-xs border-slate-200 shadow-sm focus:ring-2 ring-indigo-500/10 focus:bg-white transition-all font-medium placeholder:text-slate-400 outline-none"
-              onChange={e => setSearchQuery(e.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Macro Theme</label>
-            <select 
-              className="w-full bg-slate-50 rounded-xl px-5 py-3.5 text-xs border-slate-200 shadow-sm font-black uppercase tracking-wider cursor-pointer outline-none focus:ring-2 ring-indigo-500/10 transition-all"
-              onChange={e => setMacroFilter(e.target.value)}
-            >
-              <option value="All">All Themes</option>
-              {['Geopolitical', 'Monetary Policy', 'Inflation', 'Earnings', 'Commodities', 'Global Markets', 'Domestic Policy', 'Risk-off', 'Technical', 'Other'].map(m => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </select>
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Sentiment</label>
-            <select 
-              className="w-full bg-slate-50 rounded-xl px-5 py-3.5 text-xs border-slate-200 shadow-sm font-black uppercase tracking-wider cursor-pointer outline-none focus:ring-2 ring-indigo-500/10 transition-all"
-              onChange={e => setSentimentFilter(e.target.value)}
-            >
-              <option value="All">All Sentiment</option>
-              <option value="POSITIVE">Positive</option>
-              <option value="NEGATIVE">Negative</option>
-              <option value="NEUTRAL">Neutral</option>
-            </select>
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Impact Sector</label>
-            <select 
-              className="w-full bg-slate-50 rounded-xl px-5 py-3.5 text-xs border-slate-200 shadow-sm font-black uppercase tracking-wider cursor-pointer outline-none focus:ring-2 ring-indigo-500/10 transition-all"
-              onChange={e => setSectorFilter(e.target.value)}
-            >
-              <option value="All">All Sectors</option>
-              {allSectors.map(s => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
-          </div>
+      <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="space-y-1.5">
+          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Search Context</label>
+          <input 
+            type="text" 
+            placeholder="Filter data..." 
+            className="w-full bg-slate-50 rounded-xl px-5 py-3.5 text-xs border border-slate-200 focus:ring-2 ring-indigo-500/10 outline-none"
+            onChange={e => setSearchQuery(e.target.value)}
+          />
         </div>
-        
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-6 pt-6 border-t border-slate-100">
-          <div className="flex flex-wrap justify-center sm:justify-start gap-3 w-full sm:w-auto">
-            <button 
-              onClick={() => setScoreFilter(scoreFilter === 'High' ? 'All' : 'High')}
-              className={`px-6 py-2.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all ${scoreFilter === 'High' ? 'bg-indigo-600 text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:text-slate-900 border border-slate-200'}`}
-            >
-              High Impact
-            </button>
-            <button 
-              onClick={() => setScoreFilter(scoreFilter === 'Med' ? 'All' : 'Med')}
-              className={`px-6 py-2.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all ${scoreFilter === 'Med' ? 'bg-indigo-400 text-white shadow-lg' : 'bg-slate-50 text-slate-400 hover:text-slate-900 border border-slate-200'}`}
-            >
-              Medium Impact
-            </button>
-          </div>
-          <div className="text-[9px] sm:text-[10px] font-black text-slate-400 uppercase tracking-[0.25em] sm:tracking-[0.3em] whitespace-nowrap">
-            Found: <span className="text-slate-900 font-black">{filteredEvents.length} Data Points</span>
-          </div>
+        <div className="space-y-1.5">
+          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Macro Driver</label>
+          <select 
+            className="w-full bg-slate-50 rounded-xl px-5 py-3.5 text-xs border border-slate-200 font-bold uppercase tracking-wider outline-none"
+            onChange={e => setMacroFilter(e.target.value)}
+          >
+            <option value="All">All Drivers</option>
+            {['Geopolitical', 'Monetary Policy', 'Inflation', 'Earnings', 'Commodities', 'Global Markets', 'Domestic Policy', 'Technical'].map(m => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Market Sentiment</label>
+          <select 
+            className="w-full bg-slate-50 rounded-xl px-5 py-3.5 text-xs border border-slate-200 font-bold uppercase tracking-wider outline-none"
+            onChange={e => setSentimentFilter(e.target.value)}
+          >
+            <option value="All">All Sentiment</option>
+            <option value="POSITIVE">Positive</option>
+            <option value="NEGATIVE">Negative</option>
+            <option value="NEUTRAL">Neutral</option>
+          </select>
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl sm:rounded-[2.5rem] border border-slate-200 shadow-xl shadow-slate-200/40 overflow-hidden">
+      <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-xl overflow-hidden">
         <ResearchTable events={filteredEvents} onViewDetails={setSelectedEvent} />
       </div>
 
