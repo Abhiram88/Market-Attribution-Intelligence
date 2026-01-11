@@ -2,8 +2,8 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { MarketLog, NewsAttribution } from "../types";
 import { supabase } from "../lib/supabase";
 
-export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution & { affected_stocks?: string[], affected_sectors?: string[] }> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const modelId = "gemini-3-pro-preview";
 
   const isUp = log.niftyChange >= 0;
@@ -20,7 +20,12 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
     Your summary MUST explain the ${direction} movement. 
     If the index fell, highlight the negative drivers. If it rose, highlight the positive drivers.
     
-    Response must be professional, exhaustive (min 250 words), and include relevant sector/stock impacts.
+    Response must be professional, exhaustive (min 250 words).
+    ALSO, identify:
+    1. The top 3-5 stocks that contributed most to this movement.
+    2. The 2-3 sectors most affected.
+    
+    Return in JSON format.
   `;
 
   try {
@@ -37,11 +42,13 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
           properties: {
             headline: { type: Type.STRING },
             summary: { type: Type.STRING },
-            category: { type: Type.STRING, enum: ["Macro", "Global", "Corporate", "Geopolitical"] },
+            category: { type: Type.STRING, enum: ["Macro", "Global", "Corporate", "Geopolitical", "Technical"] },
             sentiment: { type: Type.STRING, enum: ["POSITIVE", "NEGATIVE", "NEUTRAL"] },
-            relevanceScore: { type: Type.NUMBER }
+            relevanceScore: { type: Type.NUMBER },
+            affected_stocks: { type: Type.ARRAY, items: { type: Type.STRING } },
+            affected_sectors: { type: Type.ARRAY, items: { type: Type.STRING } }
           },
-          required: ["headline", "summary", "category", "sentiment", "relevanceScore"]
+          required: ["headline", "summary", "category", "sentiment", "relevanceScore", "affected_stocks", "affected_sectors"]
         }
       }
     });
@@ -57,16 +64,17 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
 
     const result = JSON.parse(text || "{}");
     
-    // Forced alignment logic
     const validatedSentiment = isUp ? 'POSITIVE' : 'NEGATIVE';
 
-    const attribution: NewsAttribution = {
+    const attribution = {
       headline: result.headline || "Market Dynamics Report",
       summary: result.summary || "Attribution data stream interrupted. Re-analyzing telemetry...",
-      category: (result.category as any) || "Macro",
-      sentiment: validatedSentiment,
+      category: result.category || "Macro",
+      sentiment: validatedSentiment as any,
       relevanceScore: result.relevanceScore || 1.0,
-      sources
+      sources,
+      affected_stocks: result.affected_stocks || [],
+      affected_sectors: result.affected_sectors || []
     };
 
     const payload = {
@@ -75,7 +83,11 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
       summary: attribution.summary,
       category: attribution.category,
       sentiment: attribution.sentiment,
-      relevance_score: attribution.relevanceScore
+      relevance_score: attribution.relevanceScore,
+      meta: {
+        stocks: attribution.affected_stocks,
+        sectors: attribution.affected_sectors
+      }
     };
 
     const { data: existing } = await supabase
@@ -93,12 +105,10 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution>
     return attribution;
   } catch (error: any) {
     console.error("Gemini Pipeline Failure:", error);
-    
     const errorMsg = error?.message || "";
     if (errorMsg.includes("429") || errorMsg.includes("RESOURCE_EXHAUSTED") || errorMsg.includes("quota")) {
-      throw new Error("QUOTA_EXCEEDED: The Daily Attribution Engine has reached its search limit. No more reports can be generated until tomorrow.");
+      throw new Error("QUOTA_EXCEEDED: The Daily Attribution Engine has reached its limit.");
     }
-    
     throw error;
   }
 };

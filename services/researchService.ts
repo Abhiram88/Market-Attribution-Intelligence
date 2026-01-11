@@ -1,7 +1,8 @@
+
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { supabase } from "../lib/supabase";
 
-const MAX_AI_ANALYSIS_PER_RUN = 10; 
+const MAX_AI_ANALYSIS_PER_RUN = 100; 
 
 let stopRequested = false;
 let isCurrentlyRunning = false;
@@ -27,7 +28,8 @@ export const stopDeepResearch = async () => {
 };
 
 export const verifyHistoricalTelemetry = async (date: string): Promise<{ close: number, change: number } | null> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+  // Fix: Strictly follow initialization guidelines
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const prompt = `NSE Nifty 50 Index OFFICIAL closing and point change for: ${date}. 
   Return JSON: { "close": number, "change": number, "is_holiday": boolean }. 
   If market was closed, set is_holiday to true.`;
@@ -61,7 +63,8 @@ export const verifyHistoricalTelemetry = async (date: string): Promise<{ close: 
 };
 
 export const generateVerifiedIntelligence = async (date: string, actualChange: number, attempt = 1): Promise<any> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+  // Fix: Strictly follow initialization guidelines
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const prompt = `
     Analyze the Indian Stock Market (Nifty 50) for ${date}. 
     Move: ${actualChange > 0 ? 'UP' : 'DOWN'} by ${Math.abs(actualChange).toFixed(2)} pts.
