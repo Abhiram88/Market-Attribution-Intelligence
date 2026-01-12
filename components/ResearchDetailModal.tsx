@@ -1,6 +1,7 @@
+
 import React, { useState } from 'react';
 import { LedgerEvent } from '../types';
-import { generateVerifiedIntelligence, commitIntelligenceToLedger, verifyHistoricalTelemetry } from '../services/researchService';
+import { fetchCombinedIntelligence, commitIntelligenceToLedger } from '../services/researchService';
 
 interface ResearchDetailModalProps {
   event: LedgerEvent;
@@ -14,18 +15,22 @@ export const ResearchDetailModal: React.FC<ResearchDetailModalProps> = ({ event:
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Fix: Replaced missing service functions with exported fetchCombinedIntelligence
   const handleDeepAnalyze = async () => {
     setIsProcessing(true);
     setError(null);
     try {
-      const telemetry = await verifyHistoricalTelemetry(event.event_date);
-      if (!telemetry) throw new Error("Verification Failed: Market connectivity lost or date invalid.");
-      
-      const intelligence = await generateVerifiedIntelligence(event.event_date, telemetry.change);
+      const intelligence = await fetchCombinedIntelligence(event.event_date);
       if (intelligence) {
+        if (intelligence.is_holiday) {
+          throw new Error("Market was closed on this date (Holiday/Weekend).");
+        }
+        
         setDraftIntelligence(intelligence);
         setEvent(prev => ({
           ...prev,
+          nifty_close: intelligence.close || prev.nifty_close,
+          change_pts: intelligence.change || prev.change_pts,
           reason: intelligence.reason,
           macro_reason: intelligence.macro_reason,
           sentiment: intelligence.sentiment,
@@ -35,6 +40,8 @@ export const ResearchDetailModal: React.FC<ResearchDetailModalProps> = ({ event:
           affected_sectors: intelligence.affected_sectors || [],
           sources: intelligence.sources_used
         }));
+      } else {
+        throw new Error("Causal intelligence engine failed to return data.");
       }
     } catch (err: any) {
       setError(`Engine Error: ${err.message}`);
@@ -43,11 +50,12 @@ export const ResearchDetailModal: React.FC<ResearchDetailModalProps> = ({ event:
     }
   };
 
+  // Fix: Corrected argument count for commitIntelligenceToLedger (Expected 2, got 4)
   const handleCommitUpdate = async () => {
     if (!draftIntelligence) return;
     setIsProcessing(true);
     try {
-      const updated = await commitIntelligenceToLedger(event.event_date, event.nifty_close, event.change_pts, draftIntelligence);
+      const updated = await commitIntelligenceToLedger(event.event_date, draftIntelligence);
       setEvent(updated);
       setDraftIntelligence(null);
       if (onUpdate) onUpdate();

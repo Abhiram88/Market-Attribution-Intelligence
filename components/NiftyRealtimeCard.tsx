@@ -1,3 +1,4 @@
+
 import React, { useMemo } from 'react';
 
 interface NiftyRealtimeCardProps {
@@ -9,6 +10,9 @@ interface NiftyRealtimeCardProps {
   dayLow?: number;
   volume?: number;
   isPaused?: boolean;
+  dataSource?: string;
+  errorType?: 'token' | 'generic' | null;
+  errorMessage?: string;
 }
 
 export const NiftyRealtimeCard: React.FC<NiftyRealtimeCardProps> = ({
@@ -19,114 +23,121 @@ export const NiftyRealtimeCard: React.FC<NiftyRealtimeCardProps> = ({
   dayHigh,
   dayLow,
   volume,
-  isPaused = false
+  isPaused = false,
+  dataSource = 'Awaiting...',
+  errorType = null,
+  errorMessage
 }) => {
   const isPositive = change >= 0;
 
-  // Market Status Logic (IST)
-  const sessionInfo = useMemo(() => {
-    const now = new Date();
-    // Convert to IST
-    const istOffset = 5.5 * 60 * 60 * 1000;
-    const istDate = new Date(now.getTime() + (now.getTimezoneOffset() * 60000) + istOffset);
-    
-    const day = istDate.getDay(); // 0 is Sunday, 6 is Saturday
-    const hours = istDate.getHours();
-    const minutes = istDate.getMinutes();
-    const currentTimeMinutes = hours * 60 + minutes;
-    
-    const isWeekend = day === 0 || day === 6;
-    const marketOpen = 9 * 60 + 15; // 09:15
-    const marketClose = 15 * 60 + 30; // 15:30
-    
-    const isOpen = !isWeekend && currentTimeMinutes >= marketOpen && currentTimeMinutes <= marketClose;
-    
-    if (isWeekend) return { status: 'Weekend', color: 'text-slate-500', bg: 'bg-slate-500' };
-    if (isOpen) return { status: 'Live NSE', color: 'text-teal-400', bg: 'bg-teal-500', pulse: true };
-    return { status: 'Market Closed', color: 'text-rose-500', bg: 'bg-rose-500' };
-  }, []);
+  const connectionStatus = useMemo(() => {
+    if (errorType === 'token') {
+      return { 
+        label: 'Auth Required', 
+        detail: 'Breeze Session Expired',
+        color: 'text-amber-400', 
+        border: 'border-amber-400/40', 
+        bg: 'bg-amber-400/10', 
+        dot: 'bg-amber-400'
+      };
+    }
+
+    if (errorMessage?.includes('Network Blocked') || errorMessage?.includes('Unreachable')) {
+      return { 
+        label: 'Link Offline', 
+        detail: 'Cloud Run Unreachable',
+        color: 'text-rose-400', 
+        border: 'border-rose-400/40', 
+        bg: 'bg-rose-400/10', 
+        dot: 'bg-rose-400'
+      };
+    }
+
+    if (dataSource === 'Breeze Direct') {
+      return { 
+        label: 'Breeze Direct', 
+        detail: 'Live Telemetry Active',
+        color: 'text-emerald-400', 
+        border: 'border-emerald-400/40', 
+        bg: 'bg-emerald-400/10', 
+        dot: 'bg-emerald-400'
+      };
+    }
+
+    return { 
+      label: 'Connecting...', 
+      detail: 'Scanning Network...',
+      color: 'text-slate-400', 
+      border: 'border-slate-400/20', 
+      bg: 'bg-slate-400/5', 
+      dot: 'bg-slate-400'
+    };
+  }, [dataSource, errorType, errorMessage]);
 
   return (
-    <div className="relative bg-[#0a0f18] text-white p-6 sm:p-8 rounded-lg border border-[#1e293b] w-full max-w-2xl font-sans overflow-hidden shadow-2xl">
-      <div className="absolute top-0 right-0 w-32 h-32 bg-teal-500/5 blur-[100px] pointer-events-none" />
+    <div className="relative bg-[#0a0f18] text-white p-10 sm:p-14 rounded-[3.5rem] border border-[#1e293b] w-full font-sans overflow-hidden shadow-2xl">
+      <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-indigo-500/5 blur-[120px] pointer-events-none" />
       
-      <div className="absolute top-0 left-0 w-4 h-[1px] bg-[#1e293b]" />
-      <div className="absolute top-0 left-0 w-[1px] h-4 bg-[#1e293b]" />
-      <div className="absolute bottom-0 right-0 w-8 h-[2px] bg-teal-500/40" />
-      <div className="absolute bottom-0 right-0 w-[2px] h-8 bg-teal-500/40" />
-
-      <div className="flex justify-between items-start mb-10">
-        <div className="space-y-1">
-          <p className="text-[10px] text-teal-400 font-bold uppercase tracking-[0.25em]">
-            Market Index / Equity
-          </p>
-          <h2 className="text-4xl font-black tracking-tight">NIFTY 50</h2>
-        </div>
-        
-        <div className="flex items-center gap-2">
-          {isPaused ? (
-            <>
-              <div className="w-2 h-2 bg-amber-500 rounded-full" />
-              <span className="text-[10px] text-amber-500 font-bold uppercase tracking-widest">INGESTION PAUSED</span>
-            </>
-          ) : (
-            <>
-              <div className="relative">
-                <div className={`w-2 h-2 ${sessionInfo.bg} rounded-full ${sessionInfo.pulse ? 'animate-pulse' : ''}`} />
-                {sessionInfo.pulse && <div className="absolute inset-0 w-2 h-2 bg-teal-500 rounded-full animate-ping opacity-75" />}
-              </div>
-              <span className={`text-[10px] ${sessionInfo.color} font-bold uppercase tracking-widest`}>
-                {sessionInfo.status}
+      <div className="flex flex-col sm:flex-row justify-between items-start gap-6 mb-16 relative z-10">
+        <div className="flex flex-col gap-5">
+          <div className={`flex items-center gap-3 px-5 py-2.5 rounded-2xl border ${connectionStatus.border} ${connectionStatus.bg}`}>
+            <div className={`w-2.5 h-2.5 rounded-full ${connectionStatus.dot} animate-pulse shadow-[0_0_8px_rgba(255,255,255,0.3)]`} />
+            <div className="flex flex-col -space-y-0.5">
+              <span className={`text-[10px] font-black uppercase tracking-[0.1em] ${connectionStatus.color}`}>
+                {connectionStatus.label}
               </span>
-            </>
-          )}
+              <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">
+                {connectionStatus.detail}
+              </span>
+            </div>
+          </div>
+          <h2 className="text-4xl sm:text-6xl font-black tracking-tighter uppercase leading-none">NIFTY 50 INDEX</h2>
         </div>
       </div>
 
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-8 mb-12">
-        <div className="text-6xl md:text-7xl font-light tracking-tighter tabular-nums">
-          {price.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-        </div>
-        
-        <div className="flex items-center gap-6">
-          <div className="hidden sm:block">
-            <svg width="100" height="40" className={isPositive ? "text-teal-500" : "text-rose-500"}>
-              <path 
-                d={isPositive ? "M0,35 L20,30 L40,32 L60,20 L80,15 L100,5" : "M0,5 L20,10 L40,8 L60,20 L80,25 L100,35"} 
-                fill="none" 
-                stroke="currentColor" 
-                strokeWidth="2.5" 
-                strokeLinecap="round" 
-              />
-            </svg>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-end relative z-10">
+        <div className="space-y-8">
+          <div className="flex items-baseline gap-4">
+            <span className="text-8xl sm:text-[10rem] font-extralight tracking-tighter tabular-nums leading-none">
+              {price > 0 ? price.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '00,000.00'}
+            </span>
           </div>
           
-          <div className={`flex flex-col items-start ${isPositive ? 'text-teal-400' : 'text-rose-400'}`}>
-            <span className="text-xl font-bold tracking-tight">
-              {isPositive ? '+' : ''}{change.toFixed(2)}
-            </span>
-            <span className="text-sm font-medium opacity-80">
-              {isPositive ? '+' : ''}{changePercent.toFixed(2)}%
-            </span>
+          <div className="flex flex-wrap items-center gap-4">
+             <div className={`flex items-center gap-3 px-8 py-4 rounded-2xl ${isPositive ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'}`}>
+                <span className="text-4xl font-black tracking-tight tabular-nums">
+                  {isPositive ? '+' : ''}{change.toFixed(2)}
+                </span>
+                <span className="text-xl font-bold opacity-80 tabular-nums">
+                  ({changePercent.toFixed(2)}%)
+                </span>
+             </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-x-12 gap-y-12 border-l border-white/5 pl-0 lg:pl-16">
+          <div className="space-y-1.5">
+            <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest">High / Low</p>
+            <p className="text-2xl font-black tracking-tight text-white tabular-nums">
+              {dayHigh?.toLocaleString() || '--'} / {dayLow?.toLocaleString() || '--'}
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest">Volume (M)</p>
+            <p className="text-2xl font-black tracking-tight text-teal-400 tabular-nums">{volume?.toFixed(2) || '--'}</p>
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest">Source</p>
+            <p className="text-xl font-black uppercase text-indigo-400">{dataSource}</p>
           </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-4 pt-6 border-t border-white/10">
-        <div className="space-y-1">
-          <p className="text-[9px] text-slate-500 font-black uppercase tracking-widest">Prev Close</p>
-          <p className="text-sm font-bold tracking-tight">{prevClose?.toLocaleString() || '--'}</p>
-        </div>
-        <div className="space-y-1 border-x border-white/5 px-4">
-          <p className="text-[9px] text-slate-500 font-black uppercase tracking-widest">Day Range</p>
-          <p className="text-sm font-bold tracking-tight">
-            {dayLow?.toLocaleString() || '--'} — {dayHigh?.toLocaleString() || '--'}
-          </p>
-        </div>
-        <div className="space-y-1 text-right">
-          <p className="text-[9px] text-slate-500 font-black uppercase tracking-widest">Volume (M)</p>
-          <p className="text-sm font-bold tracking-tight">{volume ? `${volume.toFixed(2)}` : '--'}</p>
-        </div>
+      <div className="mt-20 w-full h-1 bg-white/5 rounded-full overflow-hidden">
+        <div 
+          className={`h-full transition-all duration-[2s] ${isPositive ? 'bg-teal-400' : 'bg-rose-500'}`}
+          style={{ width: price > 0 ? '100%' : '0%' }}
+        />
       </div>
     </div>
   );

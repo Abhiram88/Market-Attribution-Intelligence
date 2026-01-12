@@ -1,3 +1,4 @@
+
 export type Sentiment = 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL';
 export type MacroCategory = 'Geopolitical' | 'Monetary Policy' | 'Inflation' | 'Earnings' | 'Commodities' | 'Currency' | 'Global Markets' | 'Domestic Policy' | 'Risk-off' | 'Technical' | 'Other';
 
@@ -27,6 +28,9 @@ export interface MarketLog {
   dayLow?: number;
   dayHigh?: number;
   volume?: number;
+  // Metadata for tracking data ingestion origin
+  dataSource?: string;
+  errorMessage?: string; // New diagnostic field
 }
 
 export interface LedgerSource {

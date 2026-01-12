@@ -1,31 +1,91 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { MarketLog, NewsAttribution } from "../types";
 import { supabase } from "../lib/supabase";
+
+/**
+ * GEMINI LIVE TELEMETRY (FALLBACK)
+ * Uses Google Search to find current Nifty 50 stats when API is blocked/down.
+ */
+export const fetchMarketTelemetryViaGemini = async (): Promise<Partial<MarketLog>> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const prompt = `
+    Find the CURRENT real-time stats for the NSE Nifty 50 Index (India).
+    I need: 
+    1. Last Traded Price (LTP)
+    2. Absolute Change (pts)
+    3. Percentage Change (%)
+    4. Day's High and Low
+    5. Approximate Trading Volume (Million)
+    
+    Return ONLY valid JSON.
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview", // Flash is faster for data lookups
+      contents: prompt,
+      config: {
+        tools: [{ googleSearch: {} }],
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            ltp: { type: Type.NUMBER },
+            change: { type: Type.NUMBER },
+            percent_change: { type: Type.NUMBER },
+            high: { type: Type.NUMBER },
+            low: { type: Type.NUMBER },
+            volume: { type: Type.NUMBER }
+          },
+          required: ["ltp", "change", "percent_change", "high", "low"]
+        }
+      }
+    });
+
+    const data = JSON.parse(response.text || "{}");
+    return {
+      niftyClose: data.ltp,
+      niftyChange: data.change,
+      niftyChangePercent: data.percent_change,
+      dayHigh: data.high,
+      dayLow: data.low,
+      volume: data.volume || 0,
+      dataSource: 'Gemini Logic'
+    };
+  } catch (e) {
+    console.error("Gemini Telemetry Fallback failed:", e);
+    throw e;
+  }
+};
 
 export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution & { affected_stocks?: string[], affected_sectors?: string[] }> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const modelId = "gemini-3-pro-preview";
 
   const isUp = log.niftyChange >= 0;
-  const direction = isUp ? "UP (BULLISH)" : "DOWN (BEARISH)";
+  const direction = isUp ? "upward (BULLISH)" : "downward (BEARISH)";
+  
+  const technicalContext = `
+    TECHNICAL TELEMETRY FOR ${log.date}:
+    - Nifty 50 Index: ${log.niftyClose.toLocaleString()}
+    - Change: ${log.niftyChange.toFixed(2)} pts (${log.niftyChangePercent.toFixed(2)}%)
+    - Session Range: Low ${log.dayLow?.toLocaleString()} | High ${log.dayHigh?.toLocaleString()}
+    - Trading Volume: ${log.volume?.toFixed(2)} Million
+    - Trend: ${direction}
+  `;
 
   const prompt = `
-    You are a world-class senior quantitative financial analyst.
+    As a Senior Quantitative Market Strategist, explain the CAUSAL REASONING for the ${direction} movement in the Nifty 50 today.
     
-    Context for ${log.date}:
-    - Nifty 50 Index was ${direction} by ${Math.abs(log.niftyChange).toFixed(2)} points (${log.niftyChangePercent}%).
+    ${technicalContext}
     
     TASK:
-    Analyze the market conditions for this date using Google Search.
-    Your summary MUST explain the ${direction} movement. 
-    If the index fell, highlight the negative drivers. If it rose, highlight the positive drivers.
+    1. Use Google Search to find specific financial news, corporate earnings, or macro-economic events from TODAY that directly correlate with these specific numbers.
+    2. Provide a sophisticated, exhaustive summary (min 300 words).
+    3. Identify specific Stocks and Sectors moved today.
     
-    Response must be professional, exhaustive (min 250 words).
-    ALSO, identify:
-    1. The top 3-5 stocks that contributed most to this movement.
-    2. The 2-3 sectors most affected.
-    
-    Return in JSON format.
+    Response MUST be valid JSON.
   `;
 
   try {
@@ -54,7 +114,7 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution 
     });
 
     const text = response.text;
-    if (!text) throw new Error("Telemetry analysis yielded no results.");
+    if (!text) throw new Error("AI analysis engine returned empty.");
 
     const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
     const sources = groundingChunks?.map((chunk: any) => ({
@@ -62,16 +122,14 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution 
       title: chunk.web?.title
     })).filter((s: any) => s.uri) || [];
 
-    const result = JSON.parse(text || "{}");
+    const result = JSON.parse(text);
     
-    const validatedSentiment = isUp ? 'POSITIVE' : 'NEGATIVE';
-
     const attribution = {
-      headline: result.headline || "Market Dynamics Report",
-      summary: result.summary || "Attribution data stream interrupted. Re-analyzing telemetry...",
-      category: result.category || "Macro",
-      sentiment: validatedSentiment as any,
-      relevanceScore: result.relevanceScore || 1.0,
+      headline: result.headline,
+      summary: result.summary,
+      category: result.category,
+      sentiment: result.sentiment,
+      relevanceScore: result.relevanceScore || 95,
       sources,
       affected_stocks: result.affected_stocks || [],
       affected_sectors: result.affected_sectors || []
@@ -86,16 +144,12 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution 
       relevance_score: attribution.relevanceScore,
       meta: {
         stocks: attribution.affected_stocks,
-        sectors: attribution.affected_sectors
+        sectors: attribution.affected_sectors,
+        technical_anchor: { close: log.niftyClose, vol: log.volume }
       }
     };
 
-    const { data: existing } = await supabase
-      .from('news_attribution')
-      .select('id')
-      .eq('market_log_id', log.id)
-      .maybeSingle();
-
+    const { data: existing } = await supabase.from('news_attribution').select('id').eq('market_log_id', log.id).maybeSingle();
     if (existing) {
       await supabase.from('news_attribution').update(payload).eq('id', existing.id);
     } else {
@@ -105,10 +159,6 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution 
     return attribution;
   } catch (error: any) {
     console.error("Gemini Pipeline Failure:", error);
-    const errorMsg = error?.message || "";
-    if (errorMsg.includes("429") || errorMsg.includes("RESOURCE_EXHAUSTED") || errorMsg.includes("quota")) {
-      throw new Error("QUOTA_EXCEEDED: The Daily Attribution Engine has reached its limit.");
-    }
     throw error;
   }
 };

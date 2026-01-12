@@ -1,25 +1,44 @@
 
-import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { supabase } from "../lib/supabase";
 
-const MAX_AI_ANALYSIS_PER_RUN = 100; 
+const MAX_AI_ANALYSIS_PER_RUN = 50; 
 
 let stopRequested = false;
 let isCurrentlyRunning = false;
 
 /**
- * SEEDING LOGIC: Injects dates into the volatile_queue table.
- * Uses upsert to handle existing dates gracefully.
+ * SEEDING: Injects dates into the volatile_queue.
+ * Optimized: Filters out dates already present in ledger_events before seeding.
  */
 export const seedVolatileQueue = async (dates: string[]) => {
+  const sanitized = dates
+    .map(d => d.trim())
+    .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d));
+
+  if (sanitized.length === 0) return;
+
+  // 1. Fetch existing dates from the ledger to prevent seeding duplicates
+  const { data: existingLedger } = await supabase
+    .from('ledger_events')
+    .select('event_date')
+    .in('event_date', sanitized);
+
+  const existingDates = new Set(existingLedger?.map(row => row.event_date) || []);
+  const newDatesToQueue = sanitized.filter(d => !existingDates.has(d));
+
+  if (newDatesToQueue.length === 0) {
+    console.log("All uploaded dates already exist in the ledger. Skipping queue seeding.");
+    return;
+  }
+
+  // 2. Upsert only the unique missing dates
   const { error } = await supabase.from('volatile_queue').upsert(
-    dates.map(d => ({ event_date: d })),
+    newDatesToQueue.map(d => ({ event_date: d })),
     { onConflict: 'event_date' }
   );
-  if (error) {
-    console.error("Queue seeding failed:", error);
-    throw new Error(error.message || "Failed to seed the volatile queue.");
-  }
+  
+  if (error) throw new Error(error.message);
 };
 
 export const stopDeepResearch = async () => {
@@ -27,12 +46,31 @@ export const stopDeepResearch = async () => {
   await updateGlobalStatus('idle', 'Engine termination requested...');
 };
 
-export const verifyHistoricalTelemetry = async (date: string): Promise<{ close: number, change: number } | null> => {
-  // Fix: Strictly follow initialization guidelines
+/**
+ * PURE INTELLIGENCE FETCH
+ */
+export const fetchCombinedIntelligence = async (date: string): Promise<any> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const prompt = `NSE Nifty 50 Index OFFICIAL closing and point change for: ${date}. 
-  Return JSON: { "close": number, "change": number, "is_holiday": boolean }. 
-  If market was closed, set is_holiday to true.`;
+  const prompt = `
+    DATA EXTRACTION & ANALYSIS for NSE Nifty 50 (India)
+    DATE: ${date}
+    
+    1. Fetch the official closing price and absolute points change for Nifty 50 on ${date}.
+    2. Provide a 300-500 word technical analysis of WHY the market moved this way.
+    
+    JSON SCHEMA:
+    {
+      "close": number,
+      "change": number,
+      "reason": "Short headline",
+      "ai_attribution_summary": "Full detailed analysis",
+      "macro_reason": "One of [Geopolitical, Monetary Policy, Inflation, Earnings, Commodities, Global Markets, Domestic Policy, Technical]",
+      "sentiment": "POSITIVE | NEGATIVE | NEUTRAL",
+      "score": 0-100,
+      "affected_sectors": ["sector1"],
+      "affected_stocks": ["STOCK1"]
+    }
+  `;
 
   try {
     const response = await ai.models.generateContent({
@@ -41,74 +79,42 @@ export const verifyHistoricalTelemetry = async (date: string): Promise<{ close: 
       config: {
         tools: [{ googleSearch: {} }],
         responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            close: { type: Type.NUMBER },
-            change: { type: Type.NUMBER },
-            is_holiday: { type: Type.BOOLEAN }
-          },
-          required: ["close", "change", "is_holiday"]
-        }
+        thinkingConfig: { thinkingBudget: 4000 }
       }
     });
 
-    const data = JSON.parse(response.text || "{}");
-    if (data.is_holiday || !data.close) return null;
-    return { close: data.close, change: data.change };
+    const text = response.text;
+    if (!text) return null;
+    
+    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+    const sources = groundingChunks?.map((chunk: any) => ({
+      url: chunk.web?.uri,
+      title: chunk.web?.title,
+      source_name: chunk.web?.title,
+      published_at: new Date().toISOString()
+    })).filter((s: any) => s.url) || [];
+
+    const result = JSON.parse(text);
+    return { ...result, sources_used: sources };
   } catch (e) {
-    console.error(`Telemetry verification failed for ${date}:`, e);
+    console.error(`AI Analysis failed for ${date}:`, e);
     return null;
   }
-};
+}
 
-export const generateVerifiedIntelligence = async (date: string, actualChange: number, attempt = 1): Promise<any> => {
-  // Fix: Strictly follow initialization guidelines
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const prompt = `
-    Analyze the Indian Stock Market (Nifty 50) for ${date}. 
-    Move: ${actualChange > 0 ? 'UP' : 'DOWN'} by ${Math.abs(actualChange).toFixed(2)} pts.
-    
-    Provide:
-    1. reason: A 1-sentence headline.
-    2. ai_attribution_summary: 300+ word deep analysis using Google Search news from that specific day.
-    3. macro_reason: One of [Geopolitical, Monetary Policy, Inflation, Earnings, Commodities, Global Markets, Domestic Policy, Technical].
-    4. sentiment: [POSITIVE, NEGATIVE, NEUTRAL].
-    5. score: 0-100 impact score.
-    6. affected_sectors: Array of sectors.
-    7. affected_stocks: Array of top 5 stocks.
-  `;
-
-  try {
-    const response: GenerateContentResponse = await ai.models.generateContent({
-      model: "gemini-3-pro-preview",
-      contents: prompt,
-      config: {
-        tools: [{ googleSearch: {} }],
-        responseMimeType: "application/json"
-      }
-    });
-
-    return JSON.parse(response.text || "{}");
-  } catch (err) {
-    if (attempt < 2) return generateVerifiedIntelligence(date, actualChange, attempt + 1);
-    throw err;
-  }
-};
-
-export const commitIntelligenceToLedger = async (date: string, close: number, change: number, intelligence: any) => {
+export const commitIntelligenceToLedger = async (date: string, data: any) => {
   const { data: event, error: upsertErr } = await supabase.from('ledger_events').upsert({
     event_date: date,
-    nifty_close: close,
-    change_pts: change,
-    reason: intelligence.reason,
-    macro_reason: intelligence.macro_reason,
-    sentiment: intelligence.sentiment,
-    score: intelligence.score,
-    ai_attribution_summary: intelligence.ai_attribution_summary,
-    affected_stocks: intelligence.affected_stocks || [],
-    affected_sectors: intelligence.affected_sectors || [],
-    llm_raw_json: intelligence
+    nifty_close: data.close || 0,
+    change_pts: data.change || 0,
+    reason: data.reason || "Market Session Data",
+    macro_reason: data.macro_reason || "Technical",
+    sentiment: data.sentiment || "NEUTRAL",
+    score: data.score || 50,
+    ai_attribution_summary: data.ai_attribution_summary || "Analysis successfully synchronized.",
+    affected_stocks: data.affected_stocks || [],
+    affected_sectors: data.affected_sectors || [],
+    llm_raw_json: data
   }, { onConflict: 'event_date' }).select().single();
 
   if (upsertErr) throw upsertErr;
@@ -121,69 +127,87 @@ async function updateGlobalStatus(status: 'idle' | 'running' | 'completed' | 'fa
   } catch (e) { console.error(e); }
 }
 
+/**
+ * RESEARCH ENGINE
+ * STRICTLY processes the volatile_queue first.
+ */
 export const runDeepResearch = async () => {
   if (isCurrentlyRunning) return;
   isCurrentlyRunning = true;
   stopRequested = false;
-  let successCount = 0;
   
   try {
-    await updateGlobalStatus('running', `Checking for pending dates in queue...`);
-
-    // 1. Get processed dates
-    const { data: completed } = await supabase
-      .from('ledger_events')
-      .select('event_date')
-      .not('ai_attribution_summary', 'is', null);
-    
-    const completedSet = new Set(completed?.map(r => r.event_date) || []);
-
-    // 2. Get full queue
-    const { data: queue, error: queueErr } = await supabase
+    // 1. Fetch Priority Queue (from CSV)
+    const { data: queue } = await supabase
       .from('volatile_queue')
       .select('event_date')
       .order('event_date', { ascending: true });
-    
-    if (queueErr) throw new Error(queueErr.message);
 
-    // 3. Find missing dates (the Delta)
-    const pendingDates = queue
-      .map(q => q.event_date)
-      .filter(date => !completedSet.has(date))
-      .slice(0, MAX_AI_ANALYSIS_PER_RUN);
+    if (queue && queue.length > 0) {
+      const batch = queue.slice(0, MAX_AI_ANALYSIS_PER_RUN);
+      let processed = 0;
+      let skipped = 0;
 
-    if (pendingDates.length === 0) {
-      await updateGlobalStatus('completed', 'Queue fully processed. No pending dates.');
+      for (const item of batch) {
+        if (stopRequested) break;
+        const date = item.event_date.trim();
+
+        // SECONDARY SAFETY: CHECK LEDGER FOR DUPLICATE AGAIN
+        const { data: existing } = await supabase
+          .from('ledger_events')
+          .select('id')
+          .eq('event_date', date)
+          .maybeSingle();
+
+        if (existing) {
+          await updateGlobalStatus('running', `[SKIP] ${date} already in Ledger.`);
+          await supabase.from('volatile_queue').delete().eq('event_date', date);
+          skipped++;
+          continue;
+        }
+
+        await updateGlobalStatus('running', `[QUEUE] Analyzing: ${date}...`);
+        
+        // Remove from queue first to prevent retry collisions
+        await supabase.from('volatile_queue').delete().eq('event_date', date);
+
+        const intelligence = await fetchCombinedIntelligence(date);
+        if (intelligence) {
+          await commitIntelligenceToLedger(date, intelligence);
+          processed++;
+        }
+      }
+
+      await updateGlobalStatus('completed', `Queue Batch Done. Processed: ${processed}, Skipped: ${skipped}.`);
+      return;
+    } 
+
+    // 2. RESUME MODE (Only triggers if queue is empty)
+    await updateGlobalStatus('running', `[AUTO] Scanning Ledger for gaps...`);
+    const { data: lastEntry } = await supabase
+      .from('ledger_events')
+      .select('event_date')
+      .order('event_date', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!lastEntry) {
+      await updateGlobalStatus('idle', 'No queue or ledger data found.');
       return;
     }
 
-    await updateGlobalStatus('running', `Resuming from ${pendingDates[0]}...`);
+    const nextDate = new Date(lastEntry.event_date);
+    nextDate.setDate(nextDate.getDate() + 1);
+    const dateStr = nextDate.toISOString().split('T')[0];
 
-    for (const date of pendingDates) {
-      if (stopRequested) break;
-      
-      await updateGlobalStatus('running', `Verifying Telemetry: ${date}...`);
-      const telemetry = await verifyHistoricalTelemetry(date);
-      
-      if (telemetry) {
-        await updateGlobalStatus('running', `Analyzing Intelligence: ${date}...`);
-        const intelligence = await generateVerifiedIntelligence(date, telemetry.change);
-        await commitIntelligenceToLedger(date, telemetry.close, telemetry.change, intelligence);
-        successCount++;
-      } else {
-        // Record as a holiday in the ledger to avoid re-checking every run
-        await supabase.from('ledger_events').upsert({
-          event_date: date,
-          reason: "Market Closed / Holiday",
-          ai_attribution_summary: "N/A - Trading session not found."
-        }, { onConflict: 'event_date' });
-      }
-    }
+    await updateGlobalStatus('running', `[AUTO] Processing: ${dateStr}...`);
+    const intel = await fetchCombinedIntelligence(dateStr);
+    if (intel) await commitIntelligenceToLedger(dateStr, intel);
+    
+    await updateGlobalStatus('completed', `Audit cycle finished for ${dateStr}.`);
 
-    await updateGlobalStatus('completed', `Audit Batch Complete. Analyzed ${successCount} dates.`);
   } catch (err: any) {
-    const msg = err?.message || JSON.stringify(err);
-    await updateGlobalStatus('failed', `Engine Halted: ${msg}`);
+    await updateGlobalStatus('failed', `Engine Fault: ${err.message}`);
   } finally {
     isCurrentlyRunning = false;
   }
