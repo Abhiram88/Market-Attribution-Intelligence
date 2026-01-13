@@ -22,10 +22,11 @@ app.use((req, res, next) => {
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, X-SessionToken, Authorization, X-Proxy-Key');
   res.header('Access-Control-Allow-Credentials', 'true');
-  
+
   if (req.method === 'OPTIONS') {
     return res.status(204).send();
   }
+
   next();
 });
 
@@ -41,31 +42,43 @@ app.use((req, res, next) => {
     const clientKey = req.header("X-Proxy-Key");
     if (clientKey !== PROXY_API_KEY) {
       console.warn(`[Security] Unauthorized access attempt from ${req.ip}`);
-      return res.status(401).json({ Success: false, message: "Unauthorized: Invalid or missing X-Proxy-Key header." });
+      return res.status(401).json({
+        Success: false,
+        message: "Unauthorized: Invalid or missing X-Proxy-Key header."
+      });
     }
   }
+
   next();
 });
 
 // 3. Health & Status
 app.get('/api/breeze/health', (req, res) => {
-  res.status(200).json({ 
-    ok: true, 
-    status: 'Operational', 
+  res.status(200).json({
+    ok: true,
+    status: 'Operational',
     keys_configured: !!(BREEZE_APP_KEY && BREEZE_SECRET_KEY),
     proxy_security_active: !!PROXY_API_KEY,
     server_time: new Date().toISOString()
   });
 });
 
-// 4. Corrected Breeze Quotes Proxy (Per ICICI Breeze Spec)
+// 4. FIXED Breeze Quotes Proxy (Per ICICI Breeze Spec v1.0)
 app.get('/api/breeze/quotes', async (req, res) => {
   try {
     const sessionToken = req.header("X-SessionToken");
-    if (!sessionToken) return res.status(401).json({ Success: false, message: "Missing X-SessionToken" });
+    if (!sessionToken) {
+      return res.status(401).json({
+        Success: false,
+        message: "Missing X-SessionToken"
+      });
+    }
 
     if (!BREEZE_APP_KEY || !BREEZE_SECRET_KEY) {
-      return res.status(500).json({ Success: false, message: "Server Configuration Error: Keys missing." });
+      return res.status(500).json({
+        Success: false,
+        message: "Server Configuration Error: Keys missing."
+      });
     }
 
     const {
@@ -77,32 +90,70 @@ app.get('/api/breeze/quotes', async (req, res) => {
       strike_price = "0",
     } = req.query;
 
-    if (!expiry_date) return res.status(400).json({ Success: false, message: "Missing expiry_date" });
+    if (!expiry_date) {
+      return res.status(400).json({
+        Success: false,
+        message: "Missing expiry_date"
+      });
+    }
 
-    // Payload reconstruction for checksum and body
-    const payloadObj = { stock_code, exchange_code, expiry_date, product_type, right, strike_price };
+    // FIX #1: Correct Checksum Calculation per ICICI Breeze Documentation
+    const payloadObj = {
+      stock_code,
+      exchange_code,
+      product_type,
+      expiry_date,
+      right,
+      strike_price
+    };
+
     const payload = JSON.stringify(payloadObj);
 
-    const time_stamp = new Date().toISOString().replace(/\.\d{3}Z$/, ".000Z");
-    const checksum = crypto.createHash("sha256").update(time_stamp + payload + BREEZE_SECRET_KEY).digest("hex");
+    // Get ISO8601 timestamp with milliseconds
+    const time_stamp = new Date().toISOString();
 
+    // CORRECT: timestamp\r\n payload\r\n secret_key, then SHA256 -> Base64
+    const raw_checksum = `${time_stamp}\r\n${payload}\r\n${BREEZE_SECRET_KEY}`;
+    const checksum = crypto
+      .createHash("sha256")
+      .update(raw_checksum)
+      .digest("base64"); // Base64, not hex
+
+    console.log(`[Breeze Request] Checksum: ${checksum.substring(0, 20)}...`);
+
+    // FIX #2: Use POST with JSON body (Breeze expects POST for quotes)
     const breezeResp = await fetch("https://api.icicidirect.com/breezeapi/api/v1/quotes", {
-      method: "GET",
+      method: "POST", // Changed from GET to POST
       headers: {
         "Content-Type": "application/json",
-        "X-Checksum": `token ${checksum}`,
+        "X-Checksum": `${checksum}`, // No "token" prefix
         "X-Timestamp": time_stamp,
         "X-AppKey": BREEZE_APP_KEY,
         "X-SessionToken": sessionToken,
       },
-      body: payload // Breeze expects payload in body for quotes GET
+      body: payload // POST method supports body
     });
 
-    const text = await breezeResp.text();
-    res.status(breezeResp.status).type("application/json").send(text);
+    const responseText = await breezeResp.text();
+
+    // FIX #3: Better error diagnostics
+    if (!breezeResp.ok) {
+      console.error(`[Breeze API Error] Status: ${breezeResp.status}, Response: ${responseText}`);
+      return res.status(breezeResp.status).json({
+        Success: false,
+        message: `Breeze API Error: ${breezeResp.status}`,
+        details: responseText
+      });
+    }
+
+    res.status(200).type("application/json").send(responseText);
   } catch (e) {
-    console.error("[Proxy Fatal Error]", e);
-    res.status(500).json({ Success: false, message: `Internal Proxy Error: ${e.message}` });
+    console.error("[Proxy Fatal Error]", e.message);
+    res.status(500).json({
+      Success: false,
+      message: `Internal Proxy Error: ${e.message}`,
+      stack: process.env.NODE_ENV === 'development' ? e.stack : undefined
+    });
   }
 });
 
