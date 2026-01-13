@@ -2,6 +2,8 @@
  * ICICI BREEZE API CLIENT
  */
 
+const DEFAULT_PROXY_URL = "https://breeze-proxy-919207294606.us-west1.run.app";
+
 interface BreezeQuote {
   last_traded_price: number;
   change: number;
@@ -24,7 +26,8 @@ interface BreezeHistorical {
 
 const resolveApiUrl = (endpoint: string) => {
   const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  let base = localStorage.getItem('breeze_proxy_url') || "";
+  // Use the provided proxy URL as a default to avoid origin fallback errors
+  let base = localStorage.getItem('breeze_proxy_url') || DEFAULT_PROXY_URL;
   
   if (base) {
     base = base.trim().replace(/\/$/, "");
@@ -34,10 +37,7 @@ const resolveApiUrl = (endpoint: string) => {
     return `${base}${path}`;
   }
 
-  const origin = window.location.origin;
-  const isSandbox = origin.includes('usercontent.goog') || origin.includes('aistudio') || origin.includes('localhost');
-  if (isSandbox) return `${origin}${path}`;
-  return path;
+  return `${DEFAULT_PROXY_URL}${path}`;
 };
 
 /**
@@ -48,7 +48,12 @@ export const checkProxyHealth = async () => {
   try {
     const response = await fetch(apiUrl);
     if (!response.ok) return { ok: false, error: 'Proxy unreachable' };
-    return await response.json();
+    const text = await response.text();
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      return { ok: false, error: 'Non-JSON health response' };
+    }
   } catch (e) {
     return { ok: false, error: 'Network error connecting to proxy' };
   }
@@ -69,7 +74,14 @@ export const setDailyBreezeSession = async (apiSession: string, adminKey: string
     body: JSON.stringify({ api_session: apiSession })
   });
 
-  const json = await response.json();
+  const text = await response.text();
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    throw new Error("Gateway returned invalid response format");
+  }
+  
   if (!response.ok) throw new Error(json?.message || "Failed to set daily session");
   return json;
 };
@@ -92,10 +104,16 @@ export const fetchBreezeNiftyQuote = async (): Promise<BreezeQuote> => {
     })
   });
 
-  const json = await response.json();
+  const text = await response.text();
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    throw new Error("Breeze Proxy returned non-JSON. Check Gateway URL.");
+  }
+  
   if (!response.ok) throw new Error(json.message || `Quote fetch failed: ${response.status}`);
 
-  // Breeze Success structure often contains the data in Success array
   const row = Array.isArray(json.Success) ? json.Success.find((x: any) => x.exchange_code === "NSE") : json.Success?.[0];
   if (!row) throw new Error(json.message || "No NSE quote data returned.");
 
@@ -130,7 +148,14 @@ export const fetchBreezeHistoricalData = async (date: string): Promise<BreezeHis
     })
   });
 
-  const json = await response.json();
+  const text = await response.text();
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    throw new Error("Historical Proxy returned non-JSON. Check Gateway URL.");
+  }
+  
   if (!response.ok) throw new Error(json.message || `Historical Proxy error: ${response.status}`);
 
   const rows = json.Success;

@@ -1,4 +1,3 @@
-
 import { MarketLog } from '../types';
 import { supabase } from '../lib/supabase';
 import { fetchBreezeNiftyQuote } from './breezeService';
@@ -41,7 +40,6 @@ export const fetchRealtimeMarketTelemetry = async (): Promise<MarketLog> => {
   try {
     const quote = await fetchBreezeNiftyQuote();
     
-    // Mapping to Supabase schema: ltp, points_change, change_percent, day_high, day_low, volume, source
     const payload = {
       log_date: today,
       ltp: quote.last_traded_price,
@@ -95,7 +93,11 @@ export const fetchRealtimeMarketTelemetry = async (): Promise<MarketLog> => {
 
   } catch (error: any) {
     const errorMsg = error.message;
-    console.warn("[Telemetry Engine] Pipeline Failure:", errorMsg);
+    
+    // Handle JSON parsing errors quietly without blasting the console if possible
+    if (!errorMsg.includes("Unexpected token '<'")) {
+       console.warn("[Telemetry Engine] Pipeline Failure:", errorMsg);
+    }
 
     if (errorMsg.includes('Breeze Session Token not set')) {
       throw new Error("BREEZE_SESSION_MISSING");
@@ -123,7 +125,7 @@ export const fetchRealtimeMarketTelemetry = async (): Promise<MarketLog> => {
       dayLow: data.day_low,
       volume: data.volume,
       dataSource: 'Cached',
-      errorMessage: errorMsg
+      errorMessage: errorMsg.includes("Unexpected token '<'") ? "Gateway Connectivity Issue (HTML Response)" : errorMsg
     };
   }
 };

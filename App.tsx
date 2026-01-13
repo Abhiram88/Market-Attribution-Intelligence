@@ -3,6 +3,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { LogDetailModal } from './components/LogDetailModal';
 import { ResearchTab } from './components/ResearchTab';
 import { NiftyRealtimeCard } from './components/NiftyRealtimeCard';
+import { HistoricalCloseCard } from './components/HistoricalCloseCard';
 import { BreezeTokenModal } from './components/BreezeTokenModal';
 import { MarketLog, Sentiment, AppTab } from './types';
 import { supabase } from './lib/supabase';
@@ -22,7 +23,6 @@ const App: React.FC = () => {
 
   const fetchHistory = async () => {
     try {
-      // Updated to match the market_logs schema in the screenshot: ltp, points_change, change_percent, day_high, day_low, volume, source
       const { data, error: sbError } = await supabase
         .from('market_logs')
         .select('*, news_attribution(*)')
@@ -63,6 +63,22 @@ const App: React.FC = () => {
     }
   };
 
+  const handleRunAnalysis = async (targetLog: MarketLog) => {
+    if (!targetLog || isAnalyzing) return;
+    
+    setIsAnalyzing(true);
+    try {
+      const attribution = await analyzeMarketLog(targetLog);
+      setLogs(prev => prev.map(log => 
+        log.id === targetLog.id ? { ...log, attribution } : log
+      ));
+    } catch (err: any) {
+      console.warn("Analysis failed:", err.message);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
   const updateTelemetry = async () => {
     try {
       const health = await checkProxyHealth();
@@ -74,7 +90,7 @@ const App: React.FC = () => {
 
       const latestLog = await fetchRealtimeMarketTelemetry();
       
-      if (latestLog.errorMessage) {
+      if (latestLog.errorMessage && !latestLog.errorMessage.includes("Connectivity Issue")) {
         setError({ message: latestLog.errorMessage, type: 'generic' });
       } else {
         setError(null);
@@ -82,13 +98,20 @@ const App: React.FC = () => {
       
       setLogs(prev => {
         const otherLogs = prev.filter(l => l.date !== latestLog.date);
-        return [latestLog, ...otherLogs];
+        const newLogs = [latestLog, ...otherLogs];
+        
+        // Auto-trigger analysis if no attribution for today and no explicit error
+        if (!latestLog.attribution && !isAnalyzing && !latestLog.errorMessage) {
+          handleRunAnalysis(latestLog);
+        }
+        
+        return newLogs;
       });
     } catch (err: any) {
       if (err.message === "BREEZE_SESSION_MISSING") {
         setError({ message: "Breeze Session Required", type: 'token' });
         setShowTokenModal(true);
-      } else {
+      } else if (!err.message.includes("Unexpected token '<'")) {
         setError({ message: `Telemetry Link Failure: ${err.message}`, type: 'generic' });
       }
     }
@@ -107,23 +130,6 @@ const App: React.FC = () => {
     setShowTokenModal(false);
     setError(null);
     updateTelemetry();
-  };
-
-  const handleRunAnalysis = async () => {
-    const currentLatest = logs[0];
-    if (!currentLatest || isAnalyzing) return;
-    
-    setIsAnalyzing(true);
-    try {
-      const attribution = await analyzeMarketLog(currentLatest);
-      setLogs(prev => prev.map(log => 
-        log.id === currentLatest.id ? { ...log, attribution } : log
-      ));
-    } catch (err: any) {
-      setError({ message: `Analysis failed: ${err.message}`, type: 'generic' });
-    } finally {
-      setIsAnalyzing(false);
-    }
   };
 
   useEffect(() => { 
@@ -152,7 +158,7 @@ const App: React.FC = () => {
   
   const todayAttr = latest.attribution;
   const sessionStatus = getMarketSessionStatus();
-  const isBreezeConnected = !error && latest.dataSource === 'Breeze';
+  const isBreezeConnected = !error && (latest.dataSource === 'Breeze' || latest.dataSource === 'Breeze Direct');
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 transition-colors duration-500 font-sans selection:bg-indigo-500/30 overflow-x-hidden w-full flex flex-col">
@@ -161,78 +167,131 @@ const App: React.FC = () => {
         <div className="flex flex-col lg:flex-row justify-between items-center gap-6">
           <div className="flex flex-col items-center lg:items-start group cursor-default">
             <div className="flex items-center gap-4">
-              <h1 className="text-2xl sm:text-3xl md:text-4xl font-black uppercase tracking-tighter flex items-center gap-3 md:gap-4 group-hover:scale-[1.01] transition-transform">
-                <div className="w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14 bg-indigo-600 rounded-lg sm:rounded-[1.25rem] flex items-center justify-center shadow-2xl shadow-indigo-600/30 border border-white/10 text-white float-animation text-lg sm:text-xl md:text-2xl">
+              <h1 className="text-2xl sm:text-3xl font-black uppercase tracking-tighter flex items-center gap-3 group-hover:scale-[1.01] transition-transform">
+                <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center shadow-2xl shadow-indigo-600/30 border border-white/10 text-white float-animation text-lg">
                   IQ
                 </div>
-                <span className="whitespace-nowrap">Market Intelligence</span>
+                <span className="whitespace-nowrap">Intelligence Monitor</span>
               </h1>
               {isBreezeConnected && (
-                <div className="hidden sm:flex items-center gap-2 bg-emerald-50 border border-emerald-100 px-3 py-1.5 rounded-full animate-in fade-in zoom-in duration-500 shadow-sm">
-                  <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
-                  <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">BREEZE ACTIVE</span>
+                <div className="hidden sm:flex items-center gap-2 bg-emerald-50 border border-emerald-100 px-3 py-1.5 rounded-full animate-in fade-in zoom-in duration-500">
+                  <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                  <span className="text-[9px] font-black text-emerald-600 uppercase tracking-widest">LIVE LINK</span>
                 </div>
               )}
             </div>
             <div className="flex items-center gap-3 mt-2">
-              <span className={`text-[10px] font-mono tracking-[0.3em] uppercase font-black flex items-center gap-2 ${sessionStatus.color}`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${sessionStatus.isOpen ? 'bg-teal-400 animate-pulse' : 'bg-slate-300'}`}></span>
+              <span className={`text-[9px] font-mono tracking-[0.2em] uppercase font-black flex items-center gap-2 ${sessionStatus.color}`}>
                 {sessionStatus.label}
               </span>
               <div className="w-[1px] h-3 bg-slate-200" />
-              <button onClick={() => setShowTokenModal(true)} className="text-[10px] text-indigo-500 font-black uppercase tracking-widest hover:underline">
-                Configure API Gateway
+              <button onClick={() => setShowTokenModal(true)} className="text-[9px] text-indigo-500 font-black uppercase tracking-widest hover:underline">
+                API GATEWAY
               </button>
             </div>
           </div>
 
           <div className="flex bg-slate-100/80 p-1 rounded-2xl border border-slate-200/50">
-            <button onClick={() => setActiveTab('live')} className={`px-6 sm:px-10 py-2.5 sm:py-3 rounded-xl text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'live' ? 'bg-white text-indigo-600 shadow-sm border border-slate-200' : 'text-slate-500'}`}>Monitor</button>
-            <button onClick={() => setActiveTab('research')} className={`px-6 sm:px-10 py-2.5 sm:py-3 rounded-xl text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'research' ? 'bg-white text-indigo-600 shadow-sm border border-slate-200' : 'text-slate-500'}`}>Research</button>
+            <button onClick={() => setActiveTab('live')} className={`px-8 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'live' ? 'bg-white text-indigo-600 shadow-sm border border-slate-200' : 'text-slate-500'}`}>Live Monitor</button>
+            <button onClick={() => setActiveTab('research')} className={`px-8 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'research' ? 'bg-white text-indigo-600 shadow-sm border border-slate-200' : 'text-slate-500'}`}>Research</button>
           </div>
         </div>
       </nav>
 
       <main className="flex-1 w-full px-4 sm:px-8 md:px-12 py-8 sm:py-12">
         {activeTab === 'live' ? (
-          <div className="w-full space-y-12">
-            <NiftyRealtimeCard 
-              price={latest.niftyClose} 
-              change={latest.niftyChange} 
-              changePercent={latest.niftyChangePercent}
-              prevClose={latest.prevClose}
-              dayHigh={latest.dayHigh}
-              dayLow={latest.dayLow}
-              volume={latest.volume}
-              isPaused={!!error}
-              dataSource={latest.dataSource}
-              errorType={error?.type}
-              errorMessage={error?.message}
-            />
+          <div className="w-full space-y-12 max-w-7xl mx-auto">
+            {/* Top Grid - Side by Side Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              <div className="h-full min-h-[320px]">
+                <NiftyRealtimeCard 
+                  price={latest.niftyClose} 
+                  change={latest.niftyChange} 
+                  changePercent={latest.niftyChangePercent}
+                  dayHigh={latest.dayHigh}
+                  dayLow={latest.dayLow}
+                  volume={latest.volume}
+                  isPaused={!!error}
+                  dataSource={latest.dataSource}
+                  errorType={error?.type}
+                  // Fix: Property 'errorMessage' does not exist on type '{ message: string; type?: "token" | "generic"; }'. Use error.message instead.
+                  errorMessage={error?.message}
+                />
+              </div>
+              <div className="h-full min-h-[320px]">
+                <HistoricalCloseCard logs={logs} />
+              </div>
+            </div>
 
             {error && (
-              <div className={`p-6 rounded-[2.5rem] border flex items-center justify-between gap-4 ${error.type === 'token' ? 'bg-amber-50 border-amber-200' : 'bg-rose-50 border-rose-200'}`}>
-                <p className="text-sm font-medium">{error.message}</p>
+              <div className={`p-6 rounded-[2rem] border flex items-center justify-between gap-4 animate-in fade-in slide-in-from-top-2 ${error.type === 'token' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
+                <p className="text-xs font-bold uppercase tracking-wide">{error.message}</p>
                 {error.type === 'token' && (
-                  <button onClick={() => setShowTokenModal(true)} className="bg-indigo-600 text-white px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest">Synchronize</button>
+                  <button onClick={() => setShowTokenModal(true)} className="bg-indigo-600 text-white px-6 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest shadow-lg shadow-indigo-600/20">Re-Sync Gateway</button>
                 )}
               </div>
             )}
 
-            <div className="bg-white p-10 sm:p-14 rounded-[4rem] border border-slate-200 shadow-2xl relative overflow-hidden group">
+            {/* Causal Analysis Card */}
+            <div className="bg-white p-10 sm:p-14 rounded-[3.5rem] border border-slate-200 shadow-2xl relative overflow-hidden group">
               {todayAttr ? (
                 <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
-                  <div className="flex items-center gap-5 mb-10">
-                    <div className={`w-4 h-14 rounded-full ${latest.niftyChange >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-                    <h2 className="text-4xl sm:text-6xl font-black text-slate-900 tracking-tight leading-tight uppercase">{todayAttr.headline}</h2>
+                  <div className="flex items-start justify-between mb-8">
+                    <div className="flex items-center gap-5">
+                      <div className={`w-3 h-10 rounded-full ${latest.niftyChange >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                      <h2 className="text-3xl sm:text-5xl font-black text-slate-900 tracking-tight leading-tight uppercase max-w-4xl">{todayAttr.headline}</h2>
+                    </div>
+                    <button 
+                      onClick={() => handleRunAnalysis(latest)} 
+                      disabled={isAnalyzing}
+                      className="p-4 bg-slate-50 hover:bg-indigo-50 text-indigo-600 rounded-2xl border border-slate-200 transition-all shadow-sm group/sync"
+                      title="Sync Today's News Intelligence"
+                    >
+                       {isAnalyzing ? (
+                         <div className="w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                       ) : (
+                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-5 h-5 group-hover/sync:rotate-180 transition-transform duration-500">
+                           <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                         </svg>
+                       )}
+                    </button>
                   </div>
-                  <p className="text-slate-500 text-xl sm:text-2xl leading-relaxed font-medium mb-16">{todayAttr.summary}</p>
+                  <div className="prose prose-slate max-w-none">
+                     <p className="text-slate-600 text-lg sm:text-xl leading-relaxed font-medium whitespace-pre-wrap">{todayAttr.summary}</p>
+                  </div>
+                  
+                  <div className="mt-12 pt-10 border-t border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-end gap-10">
+                     <div className="space-y-4">
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Core Sentiment Alignment</p>
+                        <div className={`inline-flex items-center justify-center px-6 py-3 rounded-2xl text-[11px] font-black uppercase tracking-[0.2em] border shadow-sm ${
+                          todayAttr.sentiment === 'POSITIVE' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'
+                        }`}>
+                          {todayAttr.sentiment}
+                        </div>
+                     </div>
+                     <div className="space-y-4 text-left md:text-right">
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Impacted Equities</p>
+                        <div className="flex flex-wrap md:justify-end gap-2">
+                           {todayAttr.affected_stocks?.map(s => (
+                             <span key={s} className="px-4 py-2 bg-slate-900 text-white text-[10px] font-black rounded-xl uppercase tracking-widest hover:bg-indigo-600 transition-colors cursor-default">{s}</span>
+                           ))}
+                        </div>
+                     </div>
+                  </div>
                 </div>
               ) : (
-                <div className="py-40 text-center">
-                  <button onClick={handleRunAnalysis} disabled={isAnalyzing} className="bg-indigo-600 text-white px-14 py-6 rounded-[2.5rem] font-black uppercase text-xs tracking-[0.3em] shadow-2xl hover:bg-indigo-700 disabled:opacity-50">
-                    {isAnalyzing ? "Synthesizing Dossier..." : "Generate Causal Reasoning"}
-                  </button>
+                <div className="py-24 text-center space-y-6">
+                  <div className="inline-flex flex-col items-center">
+                    <div className="w-16 h-16 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-6" />
+                    <p className="text-slate-900 font-black uppercase text-xs tracking-[0.3em]">Synthesizing Intelligence Dossier...</p>
+                    <p className="text-slate-400 text-[10px] mt-2 font-bold uppercase tracking-widest">Grounded Google Search Contextualization in Progress</p>
+                    <button 
+                      onClick={() => handleRunAnalysis(latest)} 
+                      className="mt-8 text-indigo-600 font-black text-[10px] uppercase tracking-widest hover:underline"
+                    >
+                      Force Re-Sync
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

@@ -9,6 +9,9 @@ export interface NewsAttribution {
   sentiment: Sentiment;
   relevanceScore: number;
   sources?: { uri: string; title: string }[];
+  // Fix: Added affected stocks and sectors to NewsAttribution to support market analysis telemetry
+  affected_stocks?: string[];
+  affected_sectors?: string[];
 }
 
 export interface MarketLog {

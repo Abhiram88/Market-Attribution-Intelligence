@@ -59,7 +59,8 @@ export const fetchMarketTelemetryViaGemini = async (): Promise<Partial<MarketLog
   }
 };
 
-export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution & { affected_stocks?: string[], affected_sectors?: string[] }> => {
+// Fix: Simplified return type as NewsAttribution now contains the impact fields (affected_stocks/sectors)
+export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const modelId = "gemini-3-pro-preview";
 
@@ -124,7 +125,8 @@ export const analyzeMarketLog = async (log: MarketLog): Promise<NewsAttribution 
 
     const result = JSON.parse(text);
     
-    const attribution = {
+    // Fix: Using updated NewsAttribution interface properties
+    const attribution: NewsAttribution = {
       headline: result.headline,
       summary: result.summary,
       category: result.category,
