@@ -1,4 +1,3 @@
-
 import React, { useMemo } from 'react';
 
 interface NiftyRealtimeCardProps {
@@ -28,7 +27,7 @@ export const NiftyRealtimeCard: React.FC<NiftyRealtimeCardProps> = ({
   errorType = null,
   errorMessage
 }) => {
-  const isPositive = change >= 0;
+  const isPositive = (change || 0) >= 0;
 
   const connectionStatus = useMemo(() => {
     if (errorType === 'token') {
@@ -106,10 +105,10 @@ export const NiftyRealtimeCard: React.FC<NiftyRealtimeCardProps> = ({
           <div className="flex flex-wrap items-center gap-4">
              <div className={`flex items-center gap-3 px-8 py-4 rounded-2xl ${isPositive ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'}`}>
                 <span className="text-4xl font-black tracking-tight tabular-nums">
-                  {isPositive ? '+' : ''}{change.toFixed(2)}
+                  {isPositive ? '+' : ''}{(change || 0).toFixed(2)}
                 </span>
                 <span className="text-xl font-bold opacity-80 tabular-nums">
-                  ({changePercent.toFixed(2)}%)
+                  ({(changePercent || 0).toFixed(2)}%)
                 </span>
              </div>
           </div>

@@ -1,6 +1,6 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { supabase } from "../lib/supabase";
+import { fetchBreezeHistoricalData } from "./breezeService";
 
 const MAX_AI_ANALYSIS_PER_RUN = 50; 
 
@@ -9,7 +9,6 @@ let isCurrentlyRunning = false;
 
 /**
  * SEEDING: Injects dates into the volatile_queue.
- * Optimized: Filters out dates already present in ledger_events before seeding.
  */
 export const seedVolatileQueue = async (dates: string[]) => {
   const sanitized = dates
@@ -18,7 +17,6 @@ export const seedVolatileQueue = async (dates: string[]) => {
 
   if (sanitized.length === 0) return;
 
-  // 1. Fetch existing dates from the ledger to prevent seeding duplicates
   const { data: existingLedger } = await supabase
     .from('ledger_events')
     .select('event_date')
@@ -27,12 +25,8 @@ export const seedVolatileQueue = async (dates: string[]) => {
   const existingDates = new Set(existingLedger?.map(row => row.event_date) || []);
   const newDatesToQueue = sanitized.filter(d => !existingDates.has(d));
 
-  if (newDatesToQueue.length === 0) {
-    console.log("All uploaded dates already exist in the ledger. Skipping queue seeding.");
-    return;
-  }
+  if (newDatesToQueue.length === 0) return;
 
-  // 2. Upsert only the unique missing dates
   const { error } = await supabase.from('volatile_queue').upsert(
     newDatesToQueue.map(d => ({ event_date: d })),
     { onConflict: 'event_date' }
@@ -47,23 +41,36 @@ export const stopDeepResearch = async () => {
 };
 
 /**
- * PURE INTELLIGENCE FETCH
+ * CAUSAL INTELLIGENCE ENGINE
  */
-export const fetchCombinedIntelligence = async (date: string): Promise<any> => {
+export const fetchCombinedIntelligence = async (date: string, technicalData?: any): Promise<any> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  
+  const techSummary = technicalData ? `
+    TECHNICAL ANCHOR FOR ${date}:
+    - Open: ${technicalData.open}
+    - High: ${technicalData.high}
+    - Low: ${technicalData.low}
+    - Close: ${technicalData.close}
+    - Volume: ${technicalData.volume}
+  ` : `DATE: ${date}`;
+
   const prompt = `
-    DATA EXTRACTION & ANALYSIS for NSE Nifty 50 (India)
-    DATE: ${date}
+    You are Market Attribution Intelligence (IQ), a forensic market analyst.
+    Task: Explain WHY the Indian Nifty 50 moved on ${date} using grounded web search.
     
-    1. Fetch the official closing price and absolute points change for Nifty 50 on ${date}.
-    2. Provide a 300-500 word technical analysis of WHY the market moved this way.
+    ${techSummary}
+    
+    Requirements:
+    1. Find causal news/events that occurred on that specific date (or late prior evening IST).
+    2. Output STRICT JSON only.
     
     JSON SCHEMA:
     {
       "close": number,
       "change": number,
-      "reason": "Short headline",
-      "ai_attribution_summary": "Full detailed analysis",
+      "reason": "Short bold headline",
+      "ai_attribution_summary": "300-500 word technical-causal analysis",
       "macro_reason": "One of [Geopolitical, Monetary Policy, Inflation, Earnings, Commodities, Global Markets, Domestic Policy, Technical]",
       "sentiment": "POSITIVE | NEGATIVE | NEUTRAL",
       "score": 0-100,
@@ -103,6 +110,7 @@ export const fetchCombinedIntelligence = async (date: string): Promise<any> => {
 }
 
 export const commitIntelligenceToLedger = async (date: string, data: any) => {
+  // Upsert the main event
   const { data: event, error: upsertErr } = await supabase.from('ledger_events').upsert({
     event_date: date,
     nifty_close: data.close || 0,
@@ -111,13 +119,29 @@ export const commitIntelligenceToLedger = async (date: string, data: any) => {
     macro_reason: data.macro_reason || "Technical",
     sentiment: data.sentiment || "NEUTRAL",
     score: data.score || 50,
-    ai_attribution_summary: data.ai_attribution_summary || "Analysis successfully synchronized.",
+    ai_attribution_summary: data.ai_attribution_summary || "Analysis synchronized.",
     affected_stocks: data.affected_stocks || [],
     affected_sectors: data.affected_sectors || [],
     llm_raw_json: data
   }, { onConflict: 'event_date' }).select().single();
 
   if (upsertErr) throw upsertErr;
+
+  // Purge and insert sources for the citation engine
+  if (data.sources_used && data.sources_used.length > 0) {
+    await supabase.from('ledger_sources').delete().eq('ledger_event_id', event.id);
+    
+    const sourcePayload = data.sources_used.map(s => ({
+      ledger_event_id: event.id,
+      url: s.url,
+      source_name: s.source_name || s.title,
+      title: s.title,
+      published_at: s.published_at || new Date().toISOString()
+    }));
+    
+    await supabase.from('ledger_sources').insert(sourcePayload);
+  }
+
   return event;
 };
 
@@ -128,84 +152,63 @@ async function updateGlobalStatus(status: 'idle' | 'running' | 'completed' | 'fa
 }
 
 /**
- * RESEARCH ENGINE
- * STRICTLY processes the volatile_queue first.
+ * RESEARCH ENGINE: Loop through volatile_queue
  */
 export const runDeepResearch = async () => {
   if (isCurrentlyRunning) return;
   isCurrentlyRunning = true;
   stopRequested = false;
   
+  const sessionToken = localStorage.getItem('breeze_token');
+
   try {
-    // 1. Fetch Priority Queue (from CSV)
     const { data: queue } = await supabase
       .from('volatile_queue')
       .select('event_date')
       .order('event_date', { ascending: true });
 
-    if (queue && queue.length > 0) {
-      const batch = queue.slice(0, MAX_AI_ANALYSIS_PER_RUN);
-      let processed = 0;
-      let skipped = 0;
-
-      for (const item of batch) {
-        if (stopRequested) break;
-        const date = item.event_date.trim();
-
-        // SECONDARY SAFETY: CHECK LEDGER FOR DUPLICATE AGAIN
-        const { data: existing } = await supabase
-          .from('ledger_events')
-          .select('id')
-          .eq('event_date', date)
-          .maybeSingle();
-
-        if (existing) {
-          await updateGlobalStatus('running', `[SKIP] ${date} already in Ledger.`);
-          await supabase.from('volatile_queue').delete().eq('event_date', date);
-          skipped++;
-          continue;
-        }
-
-        await updateGlobalStatus('running', `[QUEUE] Analyzing: ${date}...`);
-        
-        // Remove from queue first to prevent retry collisions
-        await supabase.from('volatile_queue').delete().eq('event_date', date);
-
-        const intelligence = await fetchCombinedIntelligence(date);
-        if (intelligence) {
-          await commitIntelligenceToLedger(date, intelligence);
-          processed++;
-        }
-      }
-
-      await updateGlobalStatus('completed', `Queue Batch Done. Processed: ${processed}, Skipped: ${skipped}.`);
-      return;
-    } 
-
-    // 2. RESUME MODE (Only triggers if queue is empty)
-    await updateGlobalStatus('running', `[AUTO] Scanning Ledger for gaps...`);
-    const { data: lastEntry } = await supabase
-      .from('ledger_events')
-      .select('event_date')
-      .order('event_date', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (!lastEntry) {
-      await updateGlobalStatus('idle', 'No queue or ledger data found.');
+    if (!queue || queue.length === 0) {
+      await updateGlobalStatus('idle', 'No queue data found.');
+      isCurrentlyRunning = false;
       return;
     }
 
-    const nextDate = new Date(lastEntry.event_date);
-    nextDate.setDate(nextDate.getDate() + 1);
-    const dateStr = nextDate.toISOString().split('T')[0];
+    const batch = queue.slice(0, MAX_AI_ANALYSIS_PER_RUN);
+    let processed = 0;
 
-    await updateGlobalStatus('running', `[AUTO] Processing: ${dateStr}...`);
-    const intel = await fetchCombinedIntelligence(dateStr);
-    if (intel) await commitIntelligenceToLedger(dateStr, intel);
-    
-    await updateGlobalStatus('completed', `Audit cycle finished for ${dateStr}.`);
+    for (const item of batch) {
+      if (stopRequested) break;
+      const dateStr = item.event_date.trim();
 
+      await updateGlobalStatus('running', `[INGEST] Fetching telemetry for ${dateStr}...`);
+
+      let technical = null;
+      if (sessionToken) {
+        try {
+          technical = await fetchBreezeHistoricalData(sessionToken, dateStr);
+        } catch (e) {
+          console.warn(`Historical fetch failed for ${dateStr}, proceeding with AI fallback.`);
+        }
+      }
+
+      await updateGlobalStatus('running', `[AI] Grounded reasoning for ${dateStr}...`);
+      
+      const intel = await fetchCombinedIntelligence(dateStr, technical);
+      if (intel) {
+        // If technical fetch succeeded, override AI guesses with real data
+        if (technical) {
+          intel.close = technical.close;
+          intel.change = technical.close - technical.open;
+        }
+        await commitIntelligenceToLedger(dateStr, intel);
+        await supabase.from('volatile_queue').delete().eq('event_date', dateStr);
+        processed++;
+      } else {
+        console.error(`Intelligence synthesis failed for ${dateStr}`);
+      }
+    }
+
+    await updateGlobalStatus('completed', `Batch finished. Processed: ${processed}`);
   } catch (err: any) {
     await updateGlobalStatus('failed', `Engine Fault: ${err.message}`);
   } finally {

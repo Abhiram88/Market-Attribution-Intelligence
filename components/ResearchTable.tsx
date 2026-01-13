@@ -30,9 +30,9 @@ export const ResearchTable: React.FC<ResearchTableProps> = ({ events, onViewDeta
             </tr>
           ) : (
             events.map((e) => {
-              const prevClose = e.nifty_close - e.change_pts;
-              const percentChange = (e.change_pts / prevClose) * 100;
-              const isPositive = e.change_pts >= 0;
+              const prevClose = (e.nifty_close || 0) - (e.change_pts || 0);
+              const percentChange = prevClose !== 0 ? ((e.change_pts || 0) / prevClose) * 100 : 0;
+              const isPositive = (e.change_pts || 0) >= 0;
 
               return (
                 <tr key={e.id} className="hover:bg-slate-50/60 transition-all group border-b border-slate-50 last:border-0">
@@ -43,16 +43,16 @@ export const ResearchTable: React.FC<ResearchTableProps> = ({ events, onViewDeta
                   </td>
                   <td className="px-6 sm:px-10 py-7">
                     <span className="text-sm font-black text-slate-900 tracking-tighter">
-                      {e.nifty_close.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      {(e.nifty_close || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                     </span>
                   </td>
                   <td className="px-6 sm:px-10 py-7">
                     <div className="inline-flex flex-col gap-0.5 font-black">
                       <span className={`text-[11px] flex items-center gap-1 ${isPositive ? 'text-emerald-600' : 'text-rose-600'}`}>
-                        {isPositive ? '▲' : '▼'} {Math.abs(percentChange).toFixed(2)}%
+                        {isPositive ? '▲' : '▼'} {Math.abs(percentChange || 0).toFixed(2)}%
                       </span>
                       <span className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter whitespace-nowrap">
-                        ({isPositive ? '+' : '-'}{Math.abs(e.change_pts).toFixed(1)} pts)
+                        ({isPositive ? '+' : '-'}{Math.abs(e.change_pts || 0).toFixed(1)} pts)
                       </span>
                     </div>
                   </td>

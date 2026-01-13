@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { MarketLog } from '../types';
 
@@ -9,7 +8,7 @@ interface LogDetailModalProps {
 }
 
 export const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose, onReAnalyze }) => {
-  const isPositive = log.niftyChange >= 0;
+  const isPositive = (log.niftyChange || 0) >= 0;
   
   // Calculate relative position within day's range (Momentum)
   const range = (log.dayHigh || 0) - (log.dayLow || 0);
@@ -50,11 +49,11 @@ export const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose, on
           <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
             <div className="p-8 bg-slate-50 rounded-[2.5rem] border border-slate-100 space-y-2">
               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Nifty Close</p>
-              <p className="text-3xl font-black text-slate-900 tracking-tighter">{log.niftyClose.toLocaleString(undefined, { minimumFractionDigits: 1 })}</p>
+              <p className="text-3xl font-black text-slate-900 tracking-tighter">{(log.niftyClose || 0).toLocaleString(undefined, { minimumFractionDigits: 1 })}</p>
             </div>
             <div className={`p-8 rounded-[2.5rem] border space-y-2 ${isPositive ? 'bg-emerald-50 border-emerald-100 text-emerald-600' : 'bg-rose-50 border-rose-100 text-rose-600'}`}>
               <p className="text-[10px] font-black opacity-60 uppercase tracking-widest">Session Variance</p>
-              <p className="text-3xl font-black tracking-tighter">{isPositive ? '+' : ''}{log.niftyChange.toFixed(1)}</p>
+              <p className="text-3xl font-black tracking-tighter">{isPositive ? '+' : ''}{(log.niftyChange || 0).toFixed(1)}</p>
             </div>
             <div className="p-8 bg-slate-900 rounded-[2.5rem] text-white space-y-4 flex flex-col justify-center">
               <p className="text-[10px] font-black opacity-40 uppercase tracking-widest">Day Range Position</p>

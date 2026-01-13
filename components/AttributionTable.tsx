@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { MarketLog } from '../types';
 
@@ -31,11 +30,11 @@ export const AttributionTable: React.FC<AttributionTableProps> = ({ logs, onAnal
                 <td className="px-10 py-6">
                   <span className="font-mono text-[11px] text-slate-500 font-bold bg-slate-100 px-3 py-1 rounded-lg border border-slate-200">{log.date}</span>
                 </td>
-                <td className="px-10 py-6 font-black text-slate-900">{log.niftyClose.toLocaleString(undefined, { minimumFractionDigits: 1 })}</td>
-                <td className={`px-10 py-6 font-black text-xs ${log.niftyChange >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                <td className="px-10 py-6 font-black text-slate-900">{log.niftyClose?.toLocaleString(undefined, { minimumFractionDigits: 1 })}</td>
+                <td className={`px-10 py-6 font-black text-xs ${(log.niftyChange || 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                   <div className="flex items-center gap-1">
-                    {log.niftyChange > 0 ? '▲' : '▼'}
-                    {Math.abs(log.niftyChange).toFixed(1)}
+                    {(log.niftyChange || 0) > 0 ? '▲' : '▼'}
+                    {Math.abs(log.niftyChange || 0).toFixed(1)}
                   </div>
                 </td>
                 <td className="px-10 py-6 max-w-lg cursor-pointer" onClick={() => log.attribution && onViewDetails(log)}>

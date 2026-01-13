@@ -1,4 +1,3 @@
-
 import { MarketLog } from '../types';
 import { supabase } from '../lib/supabase';
 import { fetchBreezeNiftyQuote } from './breezeService';
@@ -36,12 +35,9 @@ export const getMarketSessionStatus = (): { isOpen: boolean; label: string; colo
 export const fetchRealtimeMarketTelemetry = async (sessionToken: string): Promise<MarketLog> => {
   const isSimulation = localStorage.getItem('breeze_simulation_mode') === 'true';
   const today = new Date().toISOString().split('T')[0];
-  const session = getMarketSessionStatus();
-
+  
   try {
     const quote = await fetchBreezeNiftyQuote(sessionToken);
-    
-    const dataSource = isSimulation ? 'Simulation' : 'Breeze Direct';
     
     const payload = {
       log_date: today,
@@ -58,12 +54,10 @@ export const fetchRealtimeMarketTelemetry = async (sessionToken: string): Promis
         day_low: quote.low,
         volume: quote.volume / 1000000,
         ingested_at: new Date().toISOString(),
-        session_status: session.label,
         source: isSimulation ? 'SIMULATION_MOCK' : 'BREEZE_DIRECT_V1'
       }
     };
 
-    // Only upsert to Supabase if NOT in simulation mode to keep data clean
     if (!isSimulation) {
       const { data: finalRecord, error: upsertErr } = await supabase
         .from('market_logs')
@@ -92,7 +86,6 @@ export const fetchRealtimeMarketTelemetry = async (sessionToken: string): Promis
       };
     }
 
-    // Return simulation record directly
     return {
       id: 'mock-id',
       date: today,
@@ -113,13 +106,10 @@ export const fetchRealtimeMarketTelemetry = async (sessionToken: string): Promis
 
   } catch (error: any) {
     const errorMsg = error.message;
-    console.warn("Telemetry Pipeline Blocked:", errorMsg);
+    console.warn("[Telemetry Engine] Pipeline Failure:", errorMsg);
 
-    if (errorMsg === "BREEZE_PROXY_BASE_NOT_SET") {
-      throw new Error("CONFIGURATION_REQUIRED: Static hosts require a Proxy Backend URL. Deploy server.js or enable 'Simulation Mode' in settings.");
-    }
-
-    if (errorMsg === "BREEZE_TOKEN_INVALID" || errorMsg === "BREEZE_TOKEN_MISSING") {
+    // If it's a connection error or unconfigured, we need to show the modal
+    if (errorMsg.includes('CONNECTION_ERROR') || errorMsg.includes('BREEZE_TOKEN')) {
       throw error;
     }
 
@@ -131,7 +121,7 @@ export const fetchRealtimeMarketTelemetry = async (sessionToken: string): Promis
       .limit(1)
       .maybeSingle();
 
-    if (!data) throw new Error(`Critical Offline: ${errorMsg}`);
+    if (!data) throw error; // Re-throw if no cache exists
 
     return {
       id: data.id,

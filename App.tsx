@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState, useRef } from 'react';
 import { LogDetailModal } from './components/LogDetailModal';
 import { ResearchTab } from './components/ResearchTab';
@@ -360,9 +359,9 @@ const App: React.FC = () => {
                   <div key={l.id} className="flex justify-between items-center p-6 bg-slate-50/50 rounded-2xl hover:bg-slate-50 transition-colors border border-transparent hover:border-slate-200">
                     <p className="text-[11px] font-black text-slate-900 uppercase tracking-widest">{l.date}</p>
                     <div className="flex items-center gap-8">
-                      <p className="text-[12px] font-black text-slate-900 tabular-nums">{l.niftyClose.toLocaleString()}</p>
-                      <span className={`text-[12px] font-black w-20 text-right ${l.niftyChange >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                        {l.niftyChange >= 0 ? '+' : ''}{l.niftyChangePercent.toFixed(2)}%
+                      <p className="text-[12px] font-black text-slate-900 tabular-nums">{l.niftyClose?.toLocaleString()}</p>
+                      <span className={`text-[12px] font-black w-20 text-right ${(l.niftyChange || 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {(l.niftyChange || 0) >= 0 ? '+' : ''}{(l.niftyChangePercent || 0).toFixed(2)}%
                       </span>
                     </div>
                   </div>
