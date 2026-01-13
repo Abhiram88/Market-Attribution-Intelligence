@@ -11,7 +11,6 @@ interface BreezeQuote {
   low: number;
   previous_close: number;
   volume: number;
-  spot_price?: number;
 }
 
 interface BreezeHistorical {
@@ -25,14 +24,8 @@ interface BreezeHistorical {
 
 const resolveApiUrl = (endpoint: string) => {
   const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  
   let base = localStorage.getItem('breeze_proxy_url') || "";
   
-  const cloudRunUrl = (window as any).__BREEZE_PROXY_BASE__;
-  if (!base && cloudRunUrl) {
-    base = cloudRunUrl;
-  }
-
   if (base) {
     base = base.trim().replace(/\/$/, "");
     if (!base.startsWith('http')) {
@@ -43,70 +36,82 @@ const resolveApiUrl = (endpoint: string) => {
 
   const origin = window.location.origin;
   const isSandbox = origin.includes('usercontent.goog') || origin.includes('aistudio') || origin.includes('localhost');
-  
-  if (isSandbox) {
-    return `${origin}${path}`;
-  }
-
+  if (isSandbox) return `${origin}${path}`;
   return path;
 };
 
-export const fetchBreezeNiftyQuote = async (sessionToken: string): Promise<BreezeQuote> => {
-  if (!sessionToken) throw new Error("BREEZE_TOKEN_MISSING");
-
-  const apiUrl = resolveApiUrl(`/api/breeze/quotes`);
-  const proxyKey = localStorage.getItem('breeze_proxy_key') || "";
-
-  console.log(`[Breeze Ingest] Calling Proxy via POST: ${apiUrl}`);
-
+/**
+ * Checks if the proxy is active and if the session token is set.
+ */
+export const checkProxyHealth = async () => {
+  const apiUrl = resolveApiUrl(`/api/breeze/health`);
   try {
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-SessionToken': sessionToken,
-        'X-Proxy-Key': proxyKey,
-        'Accept': 'application/json'
-      },
-      body: JSON.stringify({
-        stock_code: 'NIFTY',
-        exchange_code: 'NSE',
-        product_type: 'cash'
-      })
-    });
-
-    const json = await response.json();
-    
-    if (!response.ok) {
-      throw new Error(json.message || `Proxy Server Error: ${response.status}`);
-    }
-
-    if (json.Status === 401) throw new Error("BREEZE_TOKEN_INVALID");
-
-    const data = json.Success?.[0] || json.Success;
-    if (!data) throw new Error(json.message || "No data returned from Breeze API.");
-
-    return {
-      last_traded_price: parseFloat(data.ltp || data.last_price || data.DayClose || 0),
-      change: parseFloat(data.change || data.net_change || 0),
-      percent_change: parseFloat(data.percent_change || data.ltp_percent_change || 0),
-      open: parseFloat(data.open || 0),
-      high: parseFloat(data.high || data.DayHigh || 0),
-      low: parseFloat(data.low || data.DayLow || 0),
-      previous_close: parseFloat(data.previous_close || data.prev_close || 0),
-      volume: parseFloat(data.volume || data.DayVolume || 0)
-    };
-  } catch (error: any) {
-    if (error.name === 'TypeError' && error.message === 'Failed to fetch') {
-      throw new Error(`CONNECTION_ERROR: The Proxy Server is unreachable or blocked. Check Cloud Run URL and CORS settings.`);
-    }
-    throw error;
+    const response = await fetch(apiUrl);
+    if (!response.ok) return { ok: false, error: 'Proxy unreachable' };
+    return await response.json();
+  } catch (e) {
+    return { ok: false, error: 'Network error connecting to proxy' };
   }
 };
 
-export const fetchBreezeHistoricalData = async (sessionToken: string, date: string): Promise<BreezeHistorical> => {
-  if (!sessionToken) throw new Error("BREEZE_TOKEN_MISSING");
+/**
+ * Updates the daily session token on the proxy server.
+ */
+export const setDailyBreezeSession = async (apiSession: string, adminKey: string) => {
+  const apiUrl = resolveApiUrl(`/api/breeze/admin/api-session`);
+  
+  const response = await fetch(apiUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Proxy-Key": adminKey
+    },
+    body: JSON.stringify({ api_session: apiSession })
+  });
 
+  const json = await response.json();
+  if (!response.ok) throw new Error(json?.message || "Failed to set daily session");
+  return json;
+};
+
+export const fetchBreezeNiftyQuote = async (): Promise<BreezeQuote> => {
+  const apiUrl = resolveApiUrl(`/api/breeze/quotes`);
+  const proxyKey = localStorage.getItem('breeze_proxy_key') || "";
+
+  const response = await fetch(apiUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Proxy-Key': proxyKey,
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify({
+      stock_code: 'NIFTY',
+      exchange_code: 'NSE',
+      product_type: 'cash'
+    })
+  });
+
+  const json = await response.json();
+  if (!response.ok) throw new Error(json.message || `Quote fetch failed: ${response.status}`);
+
+  // Breeze Success structure often contains the data in Success array
+  const row = Array.isArray(json.Success) ? json.Success.find((x: any) => x.exchange_code === "NSE") : json.Success?.[0];
+  if (!row) throw new Error(json.message || "No NSE quote data returned.");
+
+  return {
+    last_traded_price: parseFloat(row.ltp || row.last_price || 0),
+    change: parseFloat(row.change || row.net_change || 0),
+    percent_change: parseFloat(row.ltp_percent_change || row.percent_change || 0),
+    open: parseFloat(row.open || 0),
+    high: parseFloat(row.high || 0),
+    low: parseFloat(row.low || 0),
+    previous_close: parseFloat(row.previous_close || row.prev_close || 0),
+    volume: parseFloat(row.volume || row.DayVolume || 0)
+  };
+};
+
+export const fetchBreezeHistoricalData = async (date: string): Promise<BreezeHistorical> => {
   const apiUrl = resolveApiUrl(`/api/breeze/historical`);
   const proxyKey = localStorage.getItem('breeze_proxy_key') || "";
 
@@ -114,7 +119,6 @@ export const fetchBreezeHistoricalData = async (sessionToken: string, date: stri
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-SessionToken': sessionToken,
       'X-Proxy-Key': proxyKey,
       'Accept': 'application/json'
     },
@@ -127,13 +131,9 @@ export const fetchBreezeHistoricalData = async (sessionToken: string, date: stri
   });
 
   const json = await response.json();
-  
-  if (!response.ok) {
-    throw new Error(json.message || `Historical Proxy error: ${response.status}`);
-  }
+  if (!response.ok) throw new Error(json.message || `Historical Proxy error: ${response.status}`);
 
   const rows = json.Success;
-  
   if (!Array.isArray(rows) || rows.length === 0) {
     throw new Error(`No historical data found for ${date}`);
   }

@@ -17,9 +17,6 @@ export interface MarketLog {
   niftyClose: number;
   niftyChange: number;
   niftyChangePercent: number;
-  nasdaqClose: number;
-  nasdaqChangePercent: number;
-  giftNiftyClose: number;
   thresholdMet: boolean;
   attribution?: NewsAttribution;
   isAnalyzing: boolean;
@@ -30,7 +27,7 @@ export interface MarketLog {
   volume?: number;
   // Metadata for tracking data ingestion origin
   dataSource?: string;
-  errorMessage?: string; // New diagnostic field
+  errorMessage?: string; 
 }
 
 export interface LedgerSource {

@@ -15,7 +15,9 @@ const BREEZE_APP_KEY = process.env.BREEZE_APP_KEY;
 const BREEZE_SECRET_KEY = process.env.BREEZE_SECRET_KEY;
 const PROXY_API_KEY = process.env.PROXY_API_KEY;
 
-// 1. Comprehensive CORS - allow all origins in preview environments
+// Internal state for the daily session token
+let BREEZE_SESSION_TOKEN = null;
+
 app.use(cors({
   origin: true, 
   credentials: true,
@@ -25,28 +27,13 @@ app.use(cors({
 
 app.use(express.json());
 
-// 2. Security Check
-app.use((req, res, next) => {
-  if (req.path === '/api/breeze/health' || !req.path.startsWith('/api/')) {
-    return next();
-  }
-
-  if (PROXY_API_KEY) {
-    const clientKey = req.header("X-Proxy-Key");
-    if (clientKey !== PROXY_API_KEY) {
-      return res.status(401).json({ Success: false, message: "Unauthorized: Invalid or missing X-Proxy-Key header." });
-    }
-  }
-  next();
-});
-
-// 3. Helper for Breeze Checksum and Fetch
-// We use POST internally even for Breeze's 'GET' data endpoints because 
-// Breeze expects a JSON body which modern fetch implementations (browser & node-fetch v3)
-// often reject when used with the GET method.
-const breezeRequest = async (path, sessionToken, payload = {}) => {
+// Helper for Breeze Checksum and Fetch
+const breezeRequest = async (path, payload = {}) => {
   if (!BREEZE_APP_KEY || !BREEZE_SECRET_KEY) {
-    throw new Error("Breeze Keys not configured on server.");
+    throw new Error("Breeze Keys (App/Secret) not configured on proxy server.");
+  }
+  if (!BREEZE_SESSION_TOKEN) {
+    throw new Error("Breeze Session Token not set on proxy. Please use the admin endpoint.");
   }
 
   const payloadStr = JSON.stringify(payload);
@@ -60,13 +47,13 @@ const breezeRequest = async (path, sessionToken, payload = {}) => {
   const url = `https://api.icicidirect.com/breezeapi/api/v1${path}`;
   
   const options = {
-    method: "POST", // Breeze supports POST for these endpoints to avoid GET-body limitations
+    method: "POST", 
     headers: {
       "Content-Type": "application/json",
       "X-Checksum": `token ${checksum}`,
       "X-Timestamp": time_stamp,
       "X-AppKey": BREEZE_APP_KEY,
-      "X-SessionToken": sessionToken,
+      "X-SessionToken": BREEZE_SESSION_TOKEN,
     },
     body: payloadStr
   };
@@ -81,29 +68,40 @@ const breezeRequest = async (path, sessionToken, payload = {}) => {
   return JSON.parse(text);
 };
 
-// 4. Endpoints
+// --- API ENDPOINTS ---
+
 app.get('/api/breeze/health', (req, res) => {
   res.status(200).json({ 
     ok: true, 
     keys_configured: !!(BREEZE_APP_KEY && BREEZE_SECRET_KEY),
+    session_token_set: !!BREEZE_SESSION_TOKEN,
     server_time: new Date().toISOString()
   });
 });
 
-// Client -> Proxy MUST use POST to send the body safely
+// Admin endpoint to set the daily session token
+app.post('/api/breeze/admin/api-session', (req, res) => {
+  const adminKey = req.header("X-Proxy-Key");
+  if (PROXY_API_KEY && adminKey !== PROXY_API_KEY) {
+    return res.status(401).json({ ok: false, message: "Invalid Admin Key" });
+  }
+  
+  const { api_session } = req.body;
+  if (!api_session) return res.status(400).json({ ok: false, message: "Missing api_session" });
+  
+  BREEZE_SESSION_TOKEN = api_session;
+  res.json({ ok: true, message: "Daily session token updated successfully." });
+});
+
 app.post('/api/breeze/quotes', async (req, res) => {
   try {
-    const sessionToken = req.header("X-SessionToken");
-    if (!sessionToken) return res.status(401).json({ ok: false, message: "Missing X-SessionToken" });
-
     const payload = req.body;
-    const data = await breezeRequest('/quotes', sessionToken, {
+    const data = await breezeRequest('/quotes', {
       stock_code: payload.stock_code || "NIFTY",
       exchange_code: payload.exchange_code || "NSE",
       product_type: payload.product_type || "cash",
-      ...payload // Support additional params like expiry_date, right, strike_price for F&O
+      ...payload 
     });
-
     res.json(data);
   } catch (e) {
     res.status(500).json({ ok: false, message: e.message || "Proxy error" });
@@ -112,15 +110,12 @@ app.post('/api/breeze/quotes', async (req, res) => {
 
 app.post('/api/breeze/historical', async (req, res) => {
   try {
-    const sessionToken = req.header("X-SessionToken");
-    if (!sessionToken) return res.status(401).json({ ok: false, message: "Missing X-SessionToken" });
-
     const payload = req.body;
     if (!payload.date) return res.status(400).json({ ok: false, message: "Missing date" });
 
     const from_to = `${payload.date}T07:00:00.000Z`;
 
-    const data = await breezeRequest('/historicalcharts', sessionToken, {
+    const data = await breezeRequest('/historicalcharts', {
       interval: payload.interval || "1day",
       from_date: from_to,
       to_date: from_to,

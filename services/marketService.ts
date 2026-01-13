@@ -1,3 +1,4 @@
+
 import { MarketLog } from '../types';
 import { supabase } from '../lib/supabase';
 import { fetchBreezeNiftyQuote } from './breezeService';
@@ -31,31 +32,25 @@ export const getMarketSessionStatus = (): { isOpen: boolean; label: string; colo
 
 /**
  * TELEMETRY INGESTION ENGINE
+ * Maps Breeze Quote to Supabase 'market_logs' table (ltp, points_change, change_percent, etc.)
  */
-export const fetchRealtimeMarketTelemetry = async (sessionToken: string): Promise<MarketLog> => {
+export const fetchRealtimeMarketTelemetry = async (): Promise<MarketLog> => {
   const isSimulation = localStorage.getItem('breeze_simulation_mode') === 'true';
   const today = new Date().toISOString().split('T')[0];
   
   try {
-    const quote = await fetchBreezeNiftyQuote(sessionToken);
+    const quote = await fetchBreezeNiftyQuote();
     
+    // Mapping to Supabase schema: ltp, points_change, change_percent, day_high, day_low, volume, source
     const payload = {
       log_date: today,
-      nifty_close: quote.last_traded_price,
-      nifty_change: quote.change,
-      nifty_change_percent: quote.percent_change,
-      nasdaq_close: 0, 
-      nasdaq_change_percent: 0,
-      gift_nifty_close: 0,
-      threshold_met: Math.abs(quote.percent_change) > 0.4,
-      meta: {
-        prev_close: quote.previous_close,
-        day_high: quote.high,
-        day_low: quote.low,
-        volume: quote.volume / 1000000,
-        ingested_at: new Date().toISOString(),
-        source: isSimulation ? 'SIMULATION_MOCK' : 'BREEZE_DIRECT_V1'
-      }
+      ltp: quote.last_traded_price,
+      points_change: quote.change,
+      change_percent: quote.percent_change,
+      day_high: quote.high,
+      day_low: quote.low,
+      volume: quote.volume,
+      source: isSimulation ? 'Simulation' : 'Breeze'
     };
 
     if (!isSimulation) {
@@ -70,18 +65,15 @@ export const fetchRealtimeMarketTelemetry = async (sessionToken: string): Promis
       return {
         id: finalRecord.id,
         date: finalRecord.log_date,
-        niftyClose: finalRecord.nifty_close,
-        niftyChange: finalRecord.nifty_change,
-        niftyChangePercent: finalRecord.nifty_change_percent,
-        nasdaqClose: 0,
-        nasdaqChangePercent: 0,
-        giftNiftyClose: 0,
-        thresholdMet: finalRecord.threshold_met,
+        niftyClose: finalRecord.ltp,
+        niftyChange: finalRecord.points_change,
+        niftyChangePercent: finalRecord.change_percent,
+        thresholdMet: Math.abs(finalRecord.change_percent) > 0.4,
         isAnalyzing: false,
-        prevClose: finalRecord.meta?.prev_close,
-        dayHigh: finalRecord.meta?.day_high,
-        dayLow: finalRecord.meta?.day_low,
-        volume: finalRecord.meta?.volume,
+        prevClose: quote.previous_close,
+        dayHigh: finalRecord.day_high,
+        dayLow: finalRecord.day_low,
+        volume: finalRecord.volume,
         dataSource: 'Breeze Direct'
       };
     }
@@ -89,18 +81,15 @@ export const fetchRealtimeMarketTelemetry = async (sessionToken: string): Promis
     return {
       id: 'mock-id',
       date: today,
-      niftyClose: payload.nifty_close,
-      niftyChange: payload.nifty_change,
-      niftyChangePercent: payload.nifty_change_percent,
-      nasdaqClose: 0,
-      nasdaqChangePercent: 0,
-      giftNiftyClose: 0,
-      thresholdMet: payload.threshold_met,
+      niftyClose: payload.ltp,
+      niftyChange: payload.points_change,
+      niftyChangePercent: payload.change_percent,
+      thresholdMet: Math.abs(payload.change_percent) > 0.4,
       isAnalyzing: false,
-      prevClose: payload.meta.prev_close,
-      dayHigh: payload.meta.day_high,
-      dayLow: payload.meta.day_low,
-      volume: payload.meta.volume,
+      prevClose: quote.previous_close,
+      dayHigh: payload.day_high,
+      dayLow: payload.day_low,
+      volume: payload.volume,
       dataSource: 'Simulation'
     };
 
@@ -108,12 +97,11 @@ export const fetchRealtimeMarketTelemetry = async (sessionToken: string): Promis
     const errorMsg = error.message;
     console.warn("[Telemetry Engine] Pipeline Failure:", errorMsg);
 
-    // If it's a connection error or unconfigured, we need to show the modal
-    if (errorMsg.includes('CONNECTION_ERROR') || errorMsg.includes('BREEZE_TOKEN')) {
-      throw error;
+    if (errorMsg.includes('Breeze Session Token not set')) {
+      throw new Error("BREEZE_SESSION_MISSING");
     }
 
-    // Historical Cache Fallback
+    // Historical Cache Fallback using current schema columns
     const { data } = await supabase
       .from('market_logs')
       .select('*')
@@ -121,23 +109,19 @@ export const fetchRealtimeMarketTelemetry = async (sessionToken: string): Promis
       .limit(1)
       .maybeSingle();
 
-    if (!data) throw error; // Re-throw if no cache exists
+    if (!data) throw error; 
 
     return {
       id: data.id,
       date: data.log_date,
-      niftyClose: data.nifty_close,
-      niftyChange: data.nifty_change,
-      niftyChangePercent: data.nifty_change_percent,
-      nasdaqClose: 0,
-      nasdaqChangePercent: 0,
-      giftNiftyClose: 0,
-      thresholdMet: data.threshold_met,
+      niftyClose: data.ltp,
+      niftyChange: data.points_change,
+      niftyChangePercent: data.change_percent,
+      thresholdMet: Math.abs(data.change_percent || 0) > 0.4,
       isAnalyzing: false,
-      prevClose: data.meta?.prev_close,
-      dayHigh: data.meta?.day_high,
-      dayLow: data.meta?.day_low,
-      volume: data.meta?.volume,
+      dayHigh: data.day_high,
+      dayLow: data.day_low,
+      volume: data.volume,
       dataSource: 'Cached',
       errorMessage: errorMsg
     };

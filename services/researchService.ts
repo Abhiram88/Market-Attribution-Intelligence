@@ -110,7 +110,6 @@ export const fetchCombinedIntelligence = async (date: string, technicalData?: an
 }
 
 export const commitIntelligenceToLedger = async (date: string, data: any) => {
-  // Upsert the main event
   const { data: event, error: upsertErr } = await supabase.from('ledger_events').upsert({
     event_date: date,
     nifty_close: data.close || 0,
@@ -127,7 +126,6 @@ export const commitIntelligenceToLedger = async (date: string, data: any) => {
 
   if (upsertErr) throw upsertErr;
 
-  // Purge and insert sources for the citation engine
   if (data.sources_used && data.sources_used.length > 0) {
     await supabase.from('ledger_sources').delete().eq('ledger_event_id', event.id);
     
@@ -151,15 +149,10 @@ async function updateGlobalStatus(status: 'idle' | 'running' | 'completed' | 'fa
   } catch (e) { console.error(e); }
 }
 
-/**
- * RESEARCH ENGINE: Loop through volatile_queue
- */
 export const runDeepResearch = async () => {
   if (isCurrentlyRunning) return;
   isCurrentlyRunning = true;
   stopRequested = false;
-  
-  const sessionToken = localStorage.getItem('breeze_token');
 
   try {
     const { data: queue } = await supabase
@@ -183,19 +176,16 @@ export const runDeepResearch = async () => {
       await updateGlobalStatus('running', `[INGEST] Fetching telemetry for ${dateStr}...`);
 
       let technical = null;
-      if (sessionToken) {
-        try {
-          technical = await fetchBreezeHistoricalData(sessionToken, dateStr);
-        } catch (e) {
-          console.warn(`Historical fetch failed for ${dateStr}, proceeding with AI fallback.`);
-        }
+      try {
+        technical = await fetchBreezeHistoricalData(dateStr);
+      } catch (e) {
+        console.warn(`Historical fetch failed for ${dateStr}, proceeding with AI fallback.`);
       }
 
       await updateGlobalStatus('running', `[AI] Grounded reasoning for ${dateStr}...`);
       
       const intel = await fetchCombinedIntelligence(dateStr, technical);
       if (intel) {
-        // If technical fetch succeeded, override AI guesses with real data
         if (technical) {
           intel.close = technical.close;
           intel.change = technical.close - technical.open;
@@ -203,8 +193,6 @@ export const runDeepResearch = async () => {
         await commitIntelligenceToLedger(dateStr, intel);
         await supabase.from('volatile_queue').delete().eq('event_date', dateStr);
         processed++;
-      } else {
-        console.error(`Intelligence synthesis failed for ${dateStr}`);
       }
     }
 
