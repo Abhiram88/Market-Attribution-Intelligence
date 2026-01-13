@@ -1,4 +1,3 @@
-
 /**
  * ICICI BREEZE API CLIENT
  */
@@ -18,10 +17,10 @@ interface BreezeQuote {
 const resolveApiUrl = (endpoint: string) => {
   const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   
-  // 1. Explicit user override (via modal)
+  // 1. Check local storage for user override (Modal set value)
   let base = localStorage.getItem('breeze_proxy_url') || "";
   
-  // 2. Built-in global override (if provided via script injection)
+  // 2. Fallback to global constant if available
   const cloudRunUrl = (window as any).__BREEZE_PROXY_BASE__;
   if (!base && cloudRunUrl) {
     base = cloudRunUrl;
@@ -29,23 +28,19 @@ const resolveApiUrl = (endpoint: string) => {
 
   if (base) {
     base = base.trim().replace(/\/$/, "");
-    // Ensure protocol is present to avoid "Failed to fetch" on relative-looking strings
     if (!base.startsWith('http')) {
       base = `https://${base}`;
     }
     return `${base}${path}`;
   }
 
-  // 3. Environment detection
   const origin = window.location.origin;
   const isPreview = origin.includes('localhost') || origin.includes('aistudio') || origin.includes('usercontent.goog');
   
-  // If we are in production (on the Cloud Run URL itself), use relative paths
   if (!isPreview) {
     return path; 
   }
 
-  // Fallback to absolute current origin
   return `${origin}${path}`;
 };
 
@@ -73,6 +68,9 @@ export const fetchBreezeNiftyQuote = async (sessionToken: string): Promise<Breez
 
   const apiUrl = resolveApiUrl(`/api/breeze/quotes?${params.toString()}`);
   const proxyKey = localStorage.getItem('breeze_proxy_key') || "";
+
+  // Mandatory Debug Log
+  console.log("Breeze calling:", apiUrl);
 
   try {
     const response = await fetch(apiUrl, {
@@ -109,17 +107,15 @@ export const fetchBreezeNiftyQuote = async (sessionToken: string): Promise<Breez
     console.error(`[Breeze Network Fault] Target: ${apiUrl}`, error);
     
     if (error.name === 'TypeError') {
-      // Diagnostic check: Test the health endpoint
       try {
         const healthUrl = resolveApiUrl('/api/breeze/health');
         const healthResponse = await fetch(healthUrl, { method: 'GET' });
         if (healthResponse.ok) {
-          throw new Error("CORS or Security Blocked: The server is online but refused the request headers.");
+          throw new Error("CORS/Security Blocked: Headers rejected by proxy server.");
         }
       } catch (hErr) {
-        throw new Error(`Cloud Run Unreachable (${apiUrl}): Ensure the service is PUBLIC ('Allow Unauthenticated') and the URL is correct.`);
+        throw new Error(`Cloud Run Unreachable: Ensure '${localStorage.getItem('breeze_proxy_url')}' is deployed and Public.`);
       }
-      throw new Error("Network Pipeline Error: Check your firewall or browser connectivity.");
     }
     throw error;
   }
