@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { LedgerEvent } from '../types';
@@ -7,7 +8,11 @@ import { runDeepResearch, stopDeepResearch, seedVolatileQueue } from '../service
 
 export const ResearchTab: React.FC = () => {
   const [events, setEvents] = useState<LedgerEvent[]>([]);
-  const [syncStatus, setSyncStatus] = useState({ status: 'idle', progress_message: 'Standby' });
+  const [syncStatus, setSyncStatus] = useState({ 
+    status: 'idle', 
+    progress_message: 'Standby',
+    active_date: null as string | null 
+  });
   const [selectedEvent, setSelectedEvent] = useState<LedgerEvent | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -21,7 +26,7 @@ export const ResearchTab: React.FC = () => {
       const { data } = await supabase
         .from('ledger_events')
         .select('*, ledger_sources(*)')
-        .order('event_date', { ascending: false });
+        .order('log_date', { ascending: false });
       
       if (data) setEvents(data.map(d => ({ ...d, sources: d.ledger_sources })));
     } catch (e) {
@@ -33,8 +38,12 @@ export const ResearchTab: React.FC = () => {
     try {
       const { data } = await supabase.from('research_status').select('*').eq('id', 1).maybeSingle();
       if (data) {
-        setSyncStatus({ status: data.status, progress_message: data.progress_message });
-        if (data.status === 'completed' || data.status === 'failed') fetchEvents();
+        setSyncStatus({ 
+          status: data.status_text || 'idle', 
+          progress_message: data.stage || 'Ready',
+          active_date: data.active_date || null
+        });
+        if (data.status_text === 'completed' || data.status_text === 'failed') fetchEvents();
       }
     } catch (e) { console.error(e); }
   };
@@ -42,14 +51,18 @@ export const ResearchTab: React.FC = () => {
   useEffect(() => {
     fetchEvents();
     checkStatus();
-    const interval = setInterval(checkStatus, 4000); 
+    const interval = setInterval(checkStatus, 3000); 
     return () => clearInterval(interval);
   }, []);
 
   const handleRun = () => {
     if (syncStatus.status === 'running') return;
     runDeepResearch();
-    setSyncStatus({ status: 'running', progress_message: 'Initiating queue audit...' });
+    setSyncStatus({ 
+      status: 'running', 
+      progress_message: 'Initiating queue audit...',
+      active_date: null
+    });
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -71,11 +84,7 @@ export const ResearchTab: React.FC = () => {
             await seedVolatileQueue(dates);
             alert(`Success: ${dates.length} dates added to volatile queue.`);
           } catch (err: any) {
-            if (err.message.includes('volatile_queue')) {
-              alert("DB ERROR: 'volatile_queue' table not found. Please create it using the SQL provided in the instructions.");
-            } else {
-              alert(`Error: ${err.message}`);
-            }
+             alert(`Error: ${err.message}`);
           }
         } else {
           alert("No valid YYYY-MM-DD dates found in the file.");
@@ -92,51 +101,70 @@ export const ResearchTab: React.FC = () => {
 
   const filteredEvents = useMemo(() => {
     return events.filter(e => {
-      const matchesMacro = macroFilter === "All" || e.macro_reason === macroFilter;
-      const matchesSentiment = sentimentFilter === "All" || e.sentiment === sentimentFilter;
+      const tech = e.technical_json || {};
+      const matchesMacro = macroFilter === "All" || tech.macro_reason === macroFilter;
+      const matchesSentiment = sentimentFilter === "All" || tech.sentiment === sentimentFilter;
       const matchesSearch = !searchQuery || 
-        (e.reason || "").toLowerCase().includes(searchQuery.toLowerCase()) || 
-        (e.ai_attribution_summary || "").toLowerCase().includes(searchQuery.toLowerCase());
+        (tech.headline || "").toLowerCase().includes(searchQuery.toLowerCase()) || 
+        (e.intelligence_summary || "").toLowerCase().includes(searchQuery.toLowerCase());
       return matchesMacro && matchesSentiment && matchesSearch;
     });
   }, [events, macroFilter, sentimentFilter, searchQuery]);
 
+  const isRunning = syncStatus.status === 'running';
+
   return (
     <div className="w-full space-y-10 animate-in fade-in duration-500">
       <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8">
-        <div>
-          <div className="flex items-center gap-4 mb-2">
+        <div className="space-y-4">
+          <div className="flex items-center gap-4">
             <h2 className="text-4xl font-black uppercase tracking-tighter">Research Ledger</h2>
-            <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".csv" className="hidden" />
-            <button 
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isUploading}
-              className="p-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all flex items-center gap-2 shadow-lg disabled:opacity-50"
-            >
-              {isUploading ? <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div> : 
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" /></svg>
-              }
-              <span className="text-[10px] font-black uppercase tracking-widest">Import CSV</span>
-            </button>
+            <div className="flex gap-2">
+              <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".csv" className="hidden" />
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploading || isRunning}
+                className="p-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all flex items-center gap-2 shadow-lg disabled:opacity-30"
+                title="Import Date Queue"
+              >
+                {isUploading ? <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div> : 
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" /></svg>
+                }
+                <span className="text-[10px] font-black uppercase tracking-widest">Import CSV</span>
+              </button>
+            </div>
           </div>
           <div className="flex items-center gap-3">
-            <span className={`w-2.5 h-2.5 rounded-full ${syncStatus.status === 'running' ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`}></span>
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-              {syncStatus.progress_message}
-            </p>
+            <div className="flex items-center gap-3">
+              <span className={`w-2.5 h-2.5 rounded-full ${isRunning ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`}></span>
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                {isRunning ? syncStatus.progress_message : 'READY'}
+              </p>
+            </div>
+            {isRunning && syncStatus.active_date && (
+              <div className="flex items-center gap-2 bg-indigo-600 text-white px-3 py-1.5 rounded-lg shadow-xl animate-in slide-in-from-left duration-500 ring-4 ring-indigo-500/10">
+                <span className="text-[9px] font-black uppercase tracking-[0.2em] opacity-80">Auditing Record:</span>
+                <span className="text-[10px] font-mono font-black">{syncStatus.active_date}</span>
+              </div>
+            )}
           </div>
         </div>
 
-        <div className="flex gap-4">
-          {syncStatus.status === 'running' && (
-            <button onClick={stopDeepResearch} className="bg-rose-600 text-white px-8 py-4 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-rose-700 transition-all">Stop</button>
+        <div className="flex gap-3">
+          {isRunning && (
+            <button 
+              onClick={stopDeepResearch} 
+              className="bg-rose-600 text-white px-8 py-4 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-rose-700 transition-all shadow-xl shadow-rose-600/20 active:scale-95 border-b-4 border-rose-800"
+            >
+              Stop
+            </button>
           )}
           <button 
             onClick={handleRun}
-            disabled={syncStatus.status === 'running'}
-            className="bg-slate-900 text-white px-10 py-4 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-indigo-600 disabled:bg-slate-200 transition-all shadow-xl"
+            disabled={isRunning}
+            className="bg-slate-900 text-white px-10 py-4 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-indigo-600 disabled:bg-slate-100 disabled:text-slate-400 transition-all shadow-xl border-b-4 border-slate-950"
           >
-            {syncStatus.status === 'running' ? 'Auditing Batch...' : 'Verified Audit'}
+            {isRunning ? 'Auditing Batch...' : 'Verified Audit'}
           </button>
         </div>
       </div>

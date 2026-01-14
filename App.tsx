@@ -47,13 +47,13 @@ const App: React.FC = () => {
             dataSource: item.source || 'Cached',
             attribution: attr ? {
               headline: attr.headline,
-              summary: attr.summary,
-              category: attr.category,
-              sentiment: attr.sentiment as Sentiment,
-              relevanceScore: attr.relevance_score,
+              narrative: attr.narrative,
+              category: attr.impact_json?.category,
+              sentiment: (attr.impact_json?.sentiment || 'NEUTRAL') as Sentiment,
+              impact_score: attr.impact_score,
               sources: [],
-              affected_stocks: attr.meta?.stocks || [],
-              affected_sectors: attr.meta?.sectors || []
+              affected_stocks: attr.impact_json?.stocks || [],
+              affected_sectors: attr.impact_json?.sectors || []
             } : undefined
           };
         }));
@@ -100,7 +100,6 @@ const App: React.FC = () => {
         const otherLogs = prev.filter(l => l.date !== latestLog.date);
         const newLogs = [latestLog, ...otherLogs];
         
-        // Auto-trigger analysis if no attribution for today and no explicit error
         if (!latestLog.attribution && !isAnalyzing && !latestLog.errorMessage) {
           handleRunAnalysis(latestLog);
         }
@@ -162,7 +161,6 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 transition-colors duration-500 font-sans selection:bg-indigo-500/30 overflow-x-hidden w-full flex flex-col">
-      
       <nav className="w-full px-4 sm:px-8 md:px-12 pt-8 pb-6 border-b border-slate-200/60 bg-white sticky top-0 z-[60]">
         <div className="flex flex-col lg:flex-row justify-between items-center gap-6">
           <div className="flex flex-col items-center lg:items-start group cursor-default">
@@ -201,7 +199,6 @@ const App: React.FC = () => {
       <main className="flex-1 w-full px-4 sm:px-8 md:px-12 py-8 sm:py-12">
         {activeTab === 'live' ? (
           <div className="w-full space-y-12 max-w-7xl mx-auto">
-            {/* Top Grid - Side by Side Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
               <div className="h-full min-h-[320px]">
                 <NiftyRealtimeCard 
@@ -214,7 +211,6 @@ const App: React.FC = () => {
                   isPaused={!!error}
                   dataSource={latest.dataSource}
                   errorType={error?.type}
-                  // Fix: Property 'errorMessage' does not exist on type '{ message: string; type?: "token" | "generic"; }'. Use error.message instead.
                   errorMessage={error?.message}
                 />
               </div>
@@ -232,7 +228,6 @@ const App: React.FC = () => {
               </div>
             )}
 
-            {/* Causal Analysis Card */}
             <div className="bg-white p-10 sm:p-14 rounded-[3.5rem] border border-slate-200 shadow-2xl relative overflow-hidden group">
               {todayAttr ? (
                 <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
@@ -257,7 +252,7 @@ const App: React.FC = () => {
                     </button>
                   </div>
                   <div className="prose prose-slate max-w-none">
-                     <p className="text-slate-600 text-lg sm:text-xl leading-relaxed font-medium whitespace-pre-wrap">{todayAttr.summary}</p>
+                     <p className="text-slate-600 text-lg sm:text-xl leading-relaxed font-medium whitespace-pre-wrap">{todayAttr.narrative}</p>
                   </div>
                   
                   <div className="mt-12 pt-10 border-t border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-end gap-10">
@@ -302,18 +297,11 @@ const App: React.FC = () => {
       </main>
 
       {showTokenModal && (
-        <BreezeTokenModal 
-          onSave={handleAuthComplete} 
-          onClose={() => setShowTokenModal(false)} 
-        />
+        <BreezeTokenModal onSave={handleAuthComplete} onClose={() => setShowTokenModal(false)} />
       )}
 
       {selectedLog && (
-        <LogDetailModal 
-          log={selectedLog} 
-          onClose={() => setSelectedLog(null)} 
-          onReAnalyze={() => {}} 
-        />
+        <LogDetailModal log={selectedLog} onClose={() => setSelectedLog(null)} onReAnalyze={() => {}} />
       )}
     </div>
   );

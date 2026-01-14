@@ -4,57 +4,50 @@ export type MacroCategory = 'Geopolitical' | 'Monetary Policy' | 'Inflation' | '
 
 export interface NewsAttribution {
   headline: string;
-  summary: string;
-  category: string;
+  narrative: string; // Matches 'narrative' in screenshot
+  category?: string;
   sentiment: Sentiment;
-  relevanceScore: number;
+  impact_score: number; // Matches 'impact_score' in screenshot
   sources?: { uri: string; title: string }[];
-  // Fix: Added affected stocks and sectors to NewsAttribution to support market analysis telemetry
   affected_stocks?: string[];
   affected_sectors?: string[];
 }
 
 export interface MarketLog {
   id: string;
-  date: string;
-  niftyClose: number;
-  niftyChange: number;
-  niftyChangePercent: number;
+  date: string; // Maps to 'log_date'
+  niftyClose: number; // Maps to 'ltp'
+  niftyChange: number; // Maps to 'points_change'
+  niftyChangePercent: number; // Maps to 'change_percent'
   thresholdMet: boolean;
   attribution?: NewsAttribution;
   isAnalyzing: boolean;
-  // Advanced Telemetry for Dashboard
-  prevClose?: number;
   dayLow?: number;
   dayHigh?: number;
+  prevClose?: number; // Added to handle telemetry response mismatch
   volume?: number;
-  // Metadata for tracking data ingestion origin
   dataSource?: string;
   errorMessage?: string; 
 }
 
 export interface LedgerSource {
-  title: string;
-  url: string;
+  id: string;
+  ledger_event_id: string;
   source_name: string;
-  published_at: string;
+  url: string;
   snippet?: string;
+  published_at: string;
+  title?: string;
 }
 
 export interface LedgerEvent {
   id: string;
-  event_date: string;
-  nifty_close: number;
-  change_pts: number;
-  reason: string;
-  macro_reason: MacroCategory;
-  sentiment: Sentiment;
-  score: number;
-  ai_attribution_summary: string;
-  llm_raw_json: any;
+  log_date: string; // Matches 'log_date' in screenshot
+  intelligence_summary: string; // Matches 'intelligence_summary' in screenshot
+  impact_score: number; // Matches 'impact_score' in screenshot
+  technical_json: any; // Matches 'technical_json' in screenshot
+  model: string;
   sources?: LedgerSource[];
-  affected_stocks: string[];
-  affected_sectors: string[];
 }
 
 export type AppTab = 'live' | 'research';

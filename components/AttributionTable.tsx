@@ -55,7 +55,8 @@ export const AttributionTable: React.FC<AttributionTableProps> = ({ logs, onAnal
                         {log.attribution.headline}
                       </p>
                       <p className="text-[12px] text-slate-500 leading-relaxed font-medium line-clamp-1">
-                        {log.attribution.summary.substring(0, 100)}...
+                        {/* Fix: use narrative instead of summary */}
+                        {log.attribution.narrative.substring(0, 100)}...
                       </p>
                     </div>
                   ) : (

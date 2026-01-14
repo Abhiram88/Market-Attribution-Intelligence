@@ -1,3 +1,4 @@
+
 /**
  * ICICI BREEZE API CLIENT
  */
@@ -26,7 +27,6 @@ interface BreezeHistorical {
 
 const resolveApiUrl = (endpoint: string) => {
   const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  // Use the provided proxy URL as a default to avoid origin fallback errors
   let base = localStorage.getItem('breeze_proxy_url') || DEFAULT_PROXY_URL;
   
   if (base) {
@@ -40,9 +40,6 @@ const resolveApiUrl = (endpoint: string) => {
   return `${DEFAULT_PROXY_URL}${path}`;
 };
 
-/**
- * Checks if the proxy is active and if the session token is set.
- */
 export const checkProxyHealth = async () => {
   const apiUrl = resolveApiUrl(`/api/breeze/health`);
   try {
@@ -59,9 +56,6 @@ export const checkProxyHealth = async () => {
   }
 };
 
-/**
- * Updates the daily session token on the proxy server.
- */
 export const setDailyBreezeSession = async (apiSession: string, adminKey: string) => {
   const apiUrl = resolveApiUrl(`/api/breeze/admin/api-session`);
   
@@ -109,22 +103,26 @@ export const fetchBreezeNiftyQuote = async (): Promise<BreezeQuote> => {
   try {
     json = JSON.parse(text);
   } catch (e) {
-    throw new Error("Breeze Proxy returned non-JSON. Check Gateway URL.");
+    throw new Error("Breeze Proxy returned non-JSON.");
   }
   
   if (!response.ok) throw new Error(json.message || `Quote fetch failed: ${response.status}`);
 
-  const row = Array.isArray(json.Success) ? json.Success.find((x: any) => x.exchange_code === "NSE") : json.Success?.[0];
-  if (!row) throw new Error(json.message || "No NSE quote data returned.");
+  // REVERTED: Working row finding logic from previous stable version
+  const row = Array.isArray(json.Success) ? json.Success.find((x: any) => x.exchange_code === "NSE") : null;
+  
+  if (!row) {
+    throw new Error("No NSE quote row returned");
+  }
 
   return {
-    last_traded_price: parseFloat(row.ltp || row.last_price || 0),
-    change: parseFloat(row.change || row.net_change || 0),
-    percent_change: parseFloat(row.ltp_percent_change || row.percent_change || 0),
+    last_traded_price: parseFloat(row.ltp || 0),
+    change: parseFloat(row.change || 0),
+    percent_change: parseFloat(row.ltp_percent_change || 0),
     open: parseFloat(row.open || 0),
     high: parseFloat(row.high || 0),
     low: parseFloat(row.low || 0),
-    previous_close: parseFloat(row.previous_close || row.prev_close || 0),
+    previous_close: parseFloat(row.previous_close || 0),
     volume: parseFloat(row.volume || row.DayVolume || 0)
   };
 };
@@ -153,7 +151,7 @@ export const fetchBreezeHistoricalData = async (date: string): Promise<BreezeHis
   try {
     json = JSON.parse(text);
   } catch (e) {
-    throw new Error("Historical Proxy returned non-JSON. Check Gateway URL.");
+    throw new Error("Historical Proxy returned non-JSON.");
   }
   
   if (!response.ok) throw new Error(json.message || `Historical Proxy error: ${response.status}`);

@@ -15,30 +15,38 @@ export const ResearchDetailModal: React.FC<ResearchDetailModalProps> = ({ event:
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Fix: Replaced missing service functions with exported fetchCombinedIntelligence
   const handleDeepAnalyze = async () => {
     setIsProcessing(true);
     setError(null);
     try {
-      const intelligence = await fetchCombinedIntelligence(event.event_date);
+      // Fix: Use log_date instead of event_date
+      const intelligence = await fetchCombinedIntelligence(event.log_date);
       if (intelligence) {
         if (intelligence.is_holiday) {
           throw new Error("Market was closed on this date (Holiday/Weekend).");
         }
         
         setDraftIntelligence(intelligence);
+        // Fix: Update internal state to match LedgerEvent schema
         setEvent(prev => ({
           ...prev,
-          nifty_close: intelligence.close || prev.nifty_close,
-          change_pts: intelligence.change || prev.change_pts,
-          reason: intelligence.reason,
-          macro_reason: intelligence.macro_reason,
-          sentiment: intelligence.sentiment,
-          score: intelligence.score,
-          ai_attribution_summary: intelligence.ai_attribution_summary,
-          affected_stocks: intelligence.affected_stocks || [],
-          affected_sectors: intelligence.affected_sectors || [],
-          sources: intelligence.sources_used
+          intelligence_summary: intelligence.intelligence_summary || prev.intelligence_summary,
+          impact_score: intelligence.impact_score || prev.impact_score,
+          technical_json: {
+            ...prev.technical_json,
+            nifty_close: intelligence.close || prev.technical_json?.nifty_close,
+            change_pts: intelligence.change || prev.technical_json?.change_pts,
+            headline: intelligence.reason_headline || prev.technical_json?.headline,
+            macro_reason: intelligence.macro_reason || prev.technical_json?.macro_reason,
+            sentiment: intelligence.sentiment || prev.technical_json?.sentiment,
+            affected_stocks: intelligence.affected_stocks || prev.technical_json?.affected_stocks || [],
+            affected_sectors: intelligence.affected_sectors || prev.technical_json?.affected_sectors || [],
+          },
+          sources: intelligence.sources_used?.map((s: any) => ({
+            ...s,
+            ledger_event_id: prev.id,
+            url: s.url
+          }))
         }));
       } else {
         throw new Error("Causal intelligence engine failed to return data.");
@@ -50,12 +58,12 @@ export const ResearchDetailModal: React.FC<ResearchDetailModalProps> = ({ event:
     }
   };
 
-  // Fix: Corrected argument count for commitIntelligenceToLedger (Expected 2, got 4)
   const handleCommitUpdate = async () => {
     if (!draftIntelligence) return;
     setIsProcessing(true);
     try {
-      const updated = await commitIntelligenceToLedger(event.event_date, draftIntelligence);
+      // Fix: Use log_date instead of event_date
+      const updated = await commitIntelligenceToLedger(event.log_date, draftIntelligence);
       setEvent(updated);
       setDraftIntelligence(null);
       if (onUpdate) onUpdate();
@@ -66,7 +74,8 @@ export const ResearchDetailModal: React.FC<ResearchDetailModalProps> = ({ event:
     }
   };
 
-  const isPositive = (event.change_pts || 0) >= 0;
+  // Fix: Access technical_json for metrics
+  const isPositive = (event.technical_json?.change_pts || 0) >= 0;
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-end bg-slate-900/40 backdrop-blur-md animate-in fade-in duration-300">
@@ -78,7 +87,8 @@ export const ResearchDetailModal: React.FC<ResearchDetailModalProps> = ({ event:
         <div className="p-10 flex justify-between items-start bg-white sticky top-0 z-20 border-b border-slate-50">
           <div className="space-y-1">
             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Event Snapshot</p>
-            <h2 className="text-4xl font-black text-slate-900 tracking-tighter uppercase">{event.event_date}</h2>
+            {/* Fix: use log_date */}
+            <h2 className="text-4xl font-black text-slate-900 tracking-tighter uppercase">{event.log_date}</h2>
           </div>
           <button 
             onClick={onClose} 
@@ -97,29 +107,34 @@ export const ResearchDetailModal: React.FC<ResearchDetailModalProps> = ({ event:
             <div className="p-8 bg-slate-50 rounded-[2.5rem] space-y-2 border border-slate-100 shadow-sm">
               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Nifty Close</p>
               <p className="text-4xl font-black text-slate-900 tracking-tighter">
-                {event.nifty_close?.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                {/* Fix: use technical_json */}
+                {(event.technical_json?.nifty_close || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
               </p>
             </div>
             <div className={`p-8 rounded-[2.5rem] space-y-2 border ${isPositive ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'} shadow-sm`}>
               <p className="text-[10px] font-black opacity-60 uppercase tracking-widest">Volatility</p>
               <p className="text-4xl font-black tracking-tighter">
-                {isPositive ? '+' : '-'}{Math.abs(event.change_pts || 0).toFixed(1)}
+                {/* Fix: use technical_json */}
+                {isPositive ? '+' : '-'}{Math.abs(event.technical_json?.change_pts || 0).toFixed(1)}
               </p>
             </div>
           </div>
 
           {/* CLASSIFICATION BADGES */}
           <div className="flex flex-wrap gap-3">
+            {/* Fix: use impact_score */}
             <div className="px-6 py-3 bg-slate-900 rounded-xl text-white text-[10px] font-black uppercase tracking-[0.2em] shadow-lg shadow-slate-900/10">
-              Impact Score: {event.score || 0}
+              Impact Score: {event.impact_score || 0}
             </div>
             <div className="px-6 py-3 bg-slate-100 rounded-xl text-slate-500 text-[10px] font-black uppercase tracking-[0.2em] border border-slate-200">
-              {event.macro_reason || 'MACRO'}
+              {/* Fix: use technical_json */}
+              {event.technical_json?.macro_reason || 'MACRO'}
             </div>
             <div className={`px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] border ${
-              event.sentiment === 'POSITIVE' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'
+              event.technical_json?.sentiment === 'POSITIVE' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'
             }`}>
-              {event.sentiment || 'NEUTRAL'}
+              {/* Fix: use technical_json */}
+              {event.technical_json?.sentiment || 'NEUTRAL'}
             </div>
           </div>
 
@@ -141,11 +156,13 @@ export const ResearchDetailModal: React.FC<ResearchDetailModalProps> = ({ event:
             <div className={`space-y-8 ${isProcessing ? 'opacity-30' : ''} transition-opacity duration-500`}>
               <div className="space-y-4">
                 <h1 className="text-3xl font-black leading-tight text-slate-900 uppercase tracking-tight">
-                  {event.reason || "Shortlist verified. Awaiting deep intelligence run."}
+                  {/* Fix: use technical_json headline */}
+                  {event.technical_json?.headline || "Shortlist verified. Awaiting deep intelligence run."}
                 </h1>
                 <div className="prose prose-slate max-w-none">
                   <p className="text-lg leading-relaxed font-medium text-slate-600 whitespace-pre-wrap">
-                    {event.ai_attribution_summary || "Audit results pending. Use the Re-Analyze tool above to trigger the 250+ word deep causal attribution engine for this volatility event."}
+                    {/* Fix: use intelligence_summary */}
+                    {event.intelligence_summary || "Audit results pending. Use the Re-Analyze tool above to trigger the 250+ word deep causal attribution engine for this volatility event."}
                   </p>
                 </div>
               </div>
@@ -166,7 +183,8 @@ export const ResearchDetailModal: React.FC<ResearchDetailModalProps> = ({ event:
             <div className="space-y-4">
               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Impacted Sectors</p>
               <div className="flex flex-wrap gap-2">
-                {event.affected_sectors?.length ? event.affected_sectors.map(s => (
+                {/* Fix: use technical_json */}
+                {event.technical_json?.affected_sectors?.length ? event.technical_json.affected_sectors.map((s: string) => (
                   <span key={s} className="px-4 py-2 bg-slate-50 text-slate-600 text-[10px] font-bold rounded-xl border border-slate-200 uppercase tracking-tight">{s}</span>
                 )) : <span className="text-[10px] text-slate-300 font-bold italic">N/A</span>}
               </div>
@@ -174,7 +192,8 @@ export const ResearchDetailModal: React.FC<ResearchDetailModalProps> = ({ event:
             <div className="space-y-4">
               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Impacted Stocks</p>
               <div className="flex flex-wrap gap-2">
-                {event.affected_stocks?.length ? event.affected_stocks.map(s => (
+                {/* Fix: use technical_json */}
+                {event.technical_json?.affected_stocks?.length ? event.technical_json.affected_stocks.map((s: string) => (
                   <span key={s} className="px-4 py-2 bg-slate-900 text-white text-[10px] font-black rounded-xl uppercase tracking-widest shadow-lg shadow-slate-900/10">{s}</span>
                 )) : <span className="text-[10px] text-slate-300 font-bold italic">N/A</span>}
               </div>

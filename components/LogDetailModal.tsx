@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { MarketLog } from '../types';
 
@@ -97,7 +98,8 @@ export const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose, on
                   </span>
                   <div className="bg-slate-50 px-6 py-2.5 rounded-xl border border-slate-200">
                     <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mr-3">System Confidence:</span>
-                    <span className="text-[10px] font-black text-slate-900 uppercase">{log.attribution.relevanceScore}%</span>
+                    {/* Fix: use impact_score instead of relevanceScore */}
+                    <span className="text-[10px] font-black text-slate-900 uppercase">{log.attribution.impact_score}%</span>
                   </div>
                 </div>
 
@@ -107,7 +109,8 @@ export const LogDetailModal: React.FC<LogDetailModalProps> = ({ log, onClose, on
                   </h4>
                   <div className="prose prose-slate max-w-none">
                     <p className="text-slate-600 text-xl md:text-2xl leading-relaxed font-medium whitespace-pre-wrap pl-10 border-l-8 border-slate-100">
-                      {log.attribution.summary}
+                      {/* Fix: use narrative instead of summary */}
+                      {log.attribution.narrative}
                     </p>
                   </div>
                 </div>

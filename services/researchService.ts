@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { supabase } from "../lib/supabase";
 import { fetchBreezeHistoricalData } from "./breezeService";
@@ -19,17 +20,22 @@ export const seedVolatileQueue = async (dates: string[]) => {
 
   const { data: existingLedger } = await supabase
     .from('ledger_events')
-    .select('event_date')
-    .in('event_date', sanitized);
+    .select('log_date')
+    .in('log_date', sanitized);
 
-  const existingDates = new Set(existingLedger?.map(row => row.event_date) || []);
+  const existingDates = new Set(existingLedger?.map(row => row.log_date) || []);
   const newDatesToQueue = sanitized.filter(d => !existingDates.has(d));
 
   if (newDatesToQueue.length === 0) return;
 
+  // Matches 'log_date' and 'inserted_at' from screenshot
   const { error } = await supabase.from('volatile_queue').upsert(
-    newDatesToQueue.map(d => ({ event_date: d })),
-    { onConflict: 'event_date' }
+    newDatesToQueue.map(d => ({ 
+      log_date: d,
+      status: 'pending',
+      inserted_at: new Date().toISOString()
+    })),
+    { onConflict: 'log_date' }
   );
   
   if (error) throw new Error(error.message);
@@ -62,18 +68,18 @@ export const fetchCombinedIntelligence = async (date: string, technicalData?: an
     ${techSummary}
     
     Requirements:
-    1. Find causal news/events that occurred on that specific date (or late prior evening IST).
+    1. Find causal news/events that occurred on that specific date (or prior evening IST).
     2. Output STRICT JSON only.
     
     JSON SCHEMA:
     {
       "close": number,
       "change": number,
-      "reason": "Short bold headline",
-      "ai_attribution_summary": "300-500 word technical-causal analysis",
+      "reason_headline": "Short bold headline",
+      "intelligence_summary": "300-500 word technical-causal analysis",
       "macro_reason": "One of [Geopolitical, Monetary Policy, Inflation, Earnings, Commodities, Global Markets, Domestic Policy, Technical]",
       "sentiment": "POSITIVE | NEGATIVE | NEUTRAL",
-      "score": 0-100,
+      "impact_score": 0-100,
       "affected_sectors": ["sector1"],
       "affected_stocks": ["STOCK1"]
     }
@@ -111,18 +117,20 @@ export const fetchCombinedIntelligence = async (date: string, technicalData?: an
 
 export const commitIntelligenceToLedger = async (date: string, data: any) => {
   const { data: event, error: upsertErr } = await supabase.from('ledger_events').upsert({
-    event_date: date,
-    nifty_close: data.close || 0,
-    change_pts: data.change || 0,
-    reason: data.reason || "Market Session Data",
-    macro_reason: data.macro_reason || "Technical",
-    sentiment: data.sentiment || "NEUTRAL",
-    score: data.score || 50,
-    ai_attribution_summary: data.ai_attribution_summary || "Analysis synchronized.",
-    affected_stocks: data.affected_stocks || [],
-    affected_sectors: data.affected_sectors || [],
-    llm_raw_json: data
-  }, { onConflict: 'event_date' }).select().single();
+    log_date: date,
+    intelligence_summary: data.intelligence_summary || "Analysis synchronized.",
+    impact_score: data.impact_score || 50,
+    model: 'gemini-3-pro-preview',
+    technical_json: {
+      headline: data.reason_headline,
+      nifty_close: data.close || 0,
+      change_pts: data.change || 0,
+      macro_reason: data.macro_reason || "Technical",
+      sentiment: data.sentiment || "NEUTRAL",
+      affected_stocks: data.affected_stocks || [],
+      affected_sectors: data.affected_sectors || []
+    }
+  }, { onConflict: 'log_date' }).select().single();
 
   if (upsertErr) throw upsertErr;
 
@@ -143,9 +151,16 @@ export const commitIntelligenceToLedger = async (date: string, data: any) => {
   return event;
 };
 
-async function updateGlobalStatus(status: 'idle' | 'running' | 'completed' | 'failed', message: string) {
+async function updateGlobalStatus(status: 'idle' | 'running' | 'completed' | 'failed', stageMsg: string, activeDate?: string) {
   try {
-    await supabase.from('research_status').upsert({ id: 1, status, progress_message: message, updated_at: new Date().toISOString() }, { onConflict: 'id' });
+    // Matches 'status_text', 'stage', 'active_date', 'updated_at' from screenshot
+    await supabase.from('research_status').upsert({ 
+      id: 1, 
+      status_text: status, 
+      stage: stageMsg, 
+      active_date: activeDate,
+      updated_at: new Date().toISOString() 
+    }, { onConflict: 'id' });
   } catch (e) { console.error(e); }
 }
 
@@ -157,8 +172,9 @@ export const runDeepResearch = async () => {
   try {
     const { data: queue } = await supabase
       .from('volatile_queue')
-      .select('event_date')
-      .order('event_date', { ascending: true });
+      .select('log_date')
+      .eq('status', 'pending')
+      .order('log_date', { ascending: true });
 
     if (!queue || queue.length === 0) {
       await updateGlobalStatus('idle', 'No queue data found.');
@@ -171,9 +187,9 @@ export const runDeepResearch = async () => {
 
     for (const item of batch) {
       if (stopRequested) break;
-      const dateStr = item.event_date.trim();
+      const dateStr = item.log_date;
 
-      await updateGlobalStatus('running', `[INGEST] Fetching telemetry for ${dateStr}...`);
+      await updateGlobalStatus('running', `[INGEST] Fetching telemetry...`, dateStr);
 
       let technical = null;
       try {
@@ -182,7 +198,7 @@ export const runDeepResearch = async () => {
         console.warn(`Historical fetch failed for ${dateStr}, proceeding with AI fallback.`);
       }
 
-      await updateGlobalStatus('running', `[AI] Grounded reasoning for ${dateStr}...`);
+      await updateGlobalStatus('running', `[AI] Grounded reasoning...`, dateStr);
       
       const intel = await fetchCombinedIntelligence(dateStr, technical);
       if (intel) {
@@ -191,7 +207,12 @@ export const runDeepResearch = async () => {
           intel.change = technical.close - technical.open;
         }
         await commitIntelligenceToLedger(dateStr, intel);
-        await supabase.from('volatile_queue').delete().eq('event_date', dateStr);
+        
+        // Update queue status
+        await supabase.from('volatile_queue')
+          .update({ status: 'completed' })
+          .eq('log_date', dateStr);
+          
         processed++;
       }
     }
