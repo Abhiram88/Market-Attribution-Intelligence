@@ -31,9 +31,8 @@ export const ResearchTable: React.FC<ResearchTableProps> = ({ events, onViewDeta
             </tr>
           ) : (
             events.map((e) => {
-              const tech = e.technical_json || {};
-              const close = tech.nifty_close || 0;
-              const change = tech.change_pts || 0;
+              const close = e.nifty_close || 0;
+              const change = e.change_pts || 0;
               const prevClose = close - change;
               const percentChange = prevClose !== 0 ? (change / prevClose) * 100 : 0;
               const isPositive = change >= 0;
@@ -42,7 +41,7 @@ export const ResearchTable: React.FC<ResearchTableProps> = ({ events, onViewDeta
                 <tr key={e.id} className="hover:bg-slate-50/60 transition-all group border-b border-slate-50 last:border-0">
                   <td className="px-6 sm:px-10 py-7">
                     <span className="flex items-center gap-2 text-[10px] font-black text-slate-900 bg-white border border-slate-200 px-3 py-1.5 rounded-lg uppercase tracking-widest shadow-sm whitespace-nowrap">
-                      {e.log_date}
+                      {e.event_date}
                     </span>
                   </td>
                   <td className="px-6 sm:px-10 py-7">
@@ -63,7 +62,7 @@ export const ResearchTable: React.FC<ResearchTableProps> = ({ events, onViewDeta
                   <td className="px-6 sm:px-10 py-7 max-w-lg">
                     <div className="space-y-1.5">
                       <p className="text-slate-800 font-bold text-[11px] leading-snug uppercase tracking-tight group-hover:text-indigo-600 transition-colors line-clamp-2">
-                        {tech.headline || "Market Session Data"}
+                        {e.reason || "Market Session Data"}
                       </p>
                       <button 
                         onClick={() => onViewDetails(e)} 
@@ -75,12 +74,12 @@ export const ResearchTable: React.FC<ResearchTableProps> = ({ events, onViewDeta
                   </td>
                   <td className="px-6 sm:px-10 py-7 text-center">
                     <div className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-slate-900 text-white text-[10px] font-black shadow-lg shadow-slate-900/10">
-                      {e.impact_score || 0}
+                      {e.score || 0}
                     </div>
                   </td>
                   <td className="px-6 sm:px-10 py-7">
                     <div className="flex flex-wrap gap-1.5 max-w-[180px]">
-                      {tech.affected_stocks?.length ? tech.affected_stocks.slice(0, 3).map((s: string, idx: number) => (
+                      {e.affected_stocks?.length ? e.affected_stocks.slice(0, 3).map((s: string, idx: number) => (
                         <span key={idx} className="text-[8px] font-black text-white bg-slate-900 px-2.5 py-1 rounded-md uppercase tracking-tighter shadow-sm">
                           {s}
                         </span>
@@ -89,7 +88,7 @@ export const ResearchTable: React.FC<ResearchTableProps> = ({ events, onViewDeta
                   </td>
                   <td className="px-6 sm:px-10 py-7">
                     <div className="flex flex-wrap gap-1.5 max-w-[180px]">
-                      {tech.affected_sectors?.length ? tech.affected_sectors.slice(0, 3).map((s: string, idx: number) => (
+                      {e.affected_sectors?.length ? e.affected_sectors.slice(0, 3).map((s: string, idx: number) => (
                         <span key={idx} className="text-[8px] font-bold text-slate-500 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md uppercase">
                           {s}
                         </span>

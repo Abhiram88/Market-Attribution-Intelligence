@@ -1,3 +1,4 @@
+
 import { MarketLog } from '../types';
 import { supabase } from '../lib/supabase';
 import { fetchBreezeNiftyQuote } from './breezeService';
@@ -22,7 +23,7 @@ export const getMarketSessionStatus = (): { isOpen: boolean; label: string; colo
   const marketOpen = 9 * 60 + 15; 
   const marketClose = 15 * 60 + 30; 
   
-  if (isWeekend) return { isOpen: false, label: "Market Closed (Weekend)", color: "text-slate-500" };
+  if (isWeekend) return { isOpen: false, label: "Market Closed", color: "text-slate-500" };
   if (currentTimeMinutes < marketOpen) return { isOpen: false, label: "Pre-Market Standby", color: "text-amber-500" };
   if (currentTimeMinutes > marketClose) return { isOpen: false, label: "Session Closed", color: "text-rose-500" };
   
@@ -31,7 +32,6 @@ export const getMarketSessionStatus = (): { isOpen: boolean; label: string; colo
 
 /**
  * TELEMETRY INGESTION ENGINE
- * Maps Breeze Quote to Supabase 'market_logs' table (ltp, points_change, change_percent, etc.)
  */
 export const fetchRealtimeMarketTelemetry = async (): Promise<MarketLog> => {
   const isSimulation = localStorage.getItem('breeze_simulation_mode') === 'true';
@@ -92,18 +92,7 @@ export const fetchRealtimeMarketTelemetry = async (): Promise<MarketLog> => {
     };
 
   } catch (error: any) {
-    const errorMsg = error.message;
-    
-    // Handle JSON parsing errors quietly without blasting the console if possible
-    if (!errorMsg.includes("Unexpected token '<'")) {
-       console.warn("[Telemetry Engine] Pipeline Failure:", errorMsg);
-    }
-
-    if (errorMsg.includes('Breeze Session Token not set')) {
-      throw new Error("BREEZE_SESSION_MISSING");
-    }
-
-    // Historical Cache Fallback using current schema columns
+    // Silent Reconciliation via Cache
     const { data } = await supabase
       .from('market_logs')
       .select('*')
@@ -124,8 +113,7 @@ export const fetchRealtimeMarketTelemetry = async (): Promise<MarketLog> => {
       dayHigh: data.day_high,
       dayLow: data.day_low,
       volume: data.volume,
-      dataSource: 'Cached',
-      errorMessage: errorMsg.includes("Unexpected token '<'") ? "Gateway Connectivity Issue (HTML Response)" : errorMsg
+      dataSource: 'Cached'
     };
   }
 };

@@ -23,65 +23,73 @@ CREATE TABLE IF NOT EXISTS market_logs (
   updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- NEWS ATTRIBUTION (MATCHES SCREENSHOT)
+-- NEWS ATTRIBUTION
 CREATE TABLE IF NOT EXISTS news_attribution (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   market_log_id UUID REFERENCES market_logs(id) ON DELETE CASCADE,
   headline TEXT,
-  narrative TEXT, -- From Screenshot
-  impact_json JSONB, -- From Screenshot
-  impact_score INTEGER, -- From Screenshot
-  model TEXT, -- From Screenshot
+  narrative TEXT,
+  impact_json JSONB,
+  impact_score INTEGER,
+  model TEXT,
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- RESEARCH LEDGER (MATCHES SCREENSHOT)
+-- RESEARCH LEDGER (EXACT SCHEMA REQUESTED)
 CREATE TABLE IF NOT EXISTS ledger_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  log_date DATE UNIQUE NOT NULL, -- From Screenshot
-  technical_json JSONB, -- From Screenshot
-  intelligence_summary TEXT, -- From Screenshot
-  impact_score INTEGER, -- From Screenshot
-  model TEXT, -- From Screenshot
+  event_date DATE UNIQUE NOT NULL,
+  nifty_close NUMERIC,
+  change_pts NUMERIC,
+  reason TEXT,
+  macro_reason TEXT,
+  sentiment TEXT,
+  score INTEGER,
+  ai_attribution_summary TEXT,
+  llm_raw_json JSONB,
+  affected_stocks TEXT[], 
+  affected_sectors TEXT[],
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS ledger_sources (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  ledger_event_id UUID REFERENCES ledger_events(id) ON DELETE CASCADE,
-  source_name TEXT, -- From Screenshot
-  url TEXT, -- From Screenshot
-  snippet TEXT, -- From Screenshot
-  published_at TIMESTAMPTZ, -- From Screenshot
+  event_id UUID REFERENCES ledger_events(id) ON DELETE CASCADE,
+  title TEXT,
+  url TEXT,
+  source_name TEXT,
+  published_at TIMESTAMPTZ,
+  snippet TEXT,
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- PROCESSING INFRASTRUCTURE (MATCHES SCREENSHOT)
+-- PROCESSING INFRASTRUCTURE
 CREATE TABLE IF NOT EXISTS volatile_queue (
-  log_date DATE PRIMARY KEY, -- From Screenshot
-  inserted_at TIMESTAMPTZ DEFAULT now(), -- From Screenshot
-  status TEXT, -- From Screenshot
-  last_error TEXT -- From Screenshot
+  log_date DATE PRIMARY KEY,
+  inserted_at TIMESTAMPTZ DEFAULT now(),
+  status TEXT DEFAULT 'pending',
+  last_error TEXT
 );
+
+-- DISABLE RLS TO ENSURE APP CAN DELETE/WIPE QUEUE
+ALTER TABLE volatile_queue DISABLE ROW LEVEL SECURITY;
+ALTER TABLE market_logs DISABLE ROW LEVEL SECURITY;
+ALTER TABLE news_attribution DISABLE ROW LEVEL SECURITY;
+ALTER TABLE ledger_events DISABLE ROW LEVEL SECURITY;
+ALTER TABLE ledger_sources DISABLE ROW LEVEL SECURITY;
 
 CREATE TABLE IF NOT EXISTS research_status (
   id INTEGER PRIMARY KEY,
-  status_text TEXT, -- From Screenshot
-  active_date DATE, -- From Screenshot
-  stage TEXT, -- From Screenshot
-  breeze_active BOOLEAN, -- From Screenshot
-  breeze_last_ok_at TIMESTAMPTZ, -- From Screenshot
-  updated_at TIMESTAMPTZ -- From Screenshot
+  status_text TEXT DEFAULT 'idle',
+  active_date DATE,
+  stage TEXT DEFAULT 'System Initialized',
+  breeze_active BOOLEAN NOT NULL DEFAULT false,
+  updated_at TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS iq_schema_meta (
-  version INTEGER PRIMARY KEY,
-  installed_at TIMESTAMPTZ DEFAULT now()
-);
-
--- Initialize status row
-INSERT INTO research_status (id, status_text, stage) 
-VALUES (1, 'idle', 'System ready') 
+-- Mandatory row for the Intelligence Monitor
+INSERT INTO research_status (id, status_text, stage, breeze_active) 
+VALUES (1, 'idle', 'Engine Ready', false) 
 ON CONFLICT (id) DO NOTHING;`;
 
   const handleCopy = () => {
@@ -97,7 +105,7 @@ ON CONFLICT (id) DO NOTHING;`;
           <div>
             <h2 className="text-2xl font-black tracking-tight uppercase">Database Schema Setup</h2>
             <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-1">
-              Aligned with requested screenshot schema
+              Synchronize Ledger Architecture
             </p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors">
@@ -112,7 +120,7 @@ ON CONFLICT (id) DO NOTHING;`;
             <button 
               onClick={handleCopy}
               className={`absolute top-4 right-4 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all z-10 ${
-                copied ? 'bg-emerald-500 text-white' : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                copied ? 'bg-emerald-50 text-white' : 'bg-indigo-600 text-white hover:bg-indigo-700'
               }`}
             >
               {copied ? 'Copied!' : 'Copy SQL Script'}

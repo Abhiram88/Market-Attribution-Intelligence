@@ -1,5 +1,5 @@
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { LogDetailModal } from './components/LogDetailModal';
 import { ResearchTab } from './components/ResearchTab';
 import { NiftyRealtimeCard } from './components/NiftyRealtimeCard';
@@ -20,6 +20,7 @@ const App: React.FC = () => {
   const [showTokenModal, setShowTokenModal] = useState(false);
   
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const hasAttemptedAutoAnalysis = useRef<Set<string>>(new Set());
 
   const fetchHistory = async () => {
     try {
@@ -59,11 +60,11 @@ const App: React.FC = () => {
         }));
       }
     } catch (err: any) {
-      console.error(err);
+      console.error("History fetch failed:", err);
     }
   };
 
-  const handleRunAnalysis = async (targetLog: MarketLog) => {
+  const handleRunAnalysis = useCallback(async (targetLog: MarketLog) => {
     if (!targetLog || isAnalyzing) return;
     
     setIsAnalyzing(true);
@@ -72,12 +73,13 @@ const App: React.FC = () => {
       setLogs(prev => prev.map(log => 
         log.id === targetLog.id ? { ...log, attribution } : log
       ));
+      hasAttemptedAutoAnalysis.current.add(targetLog.date);
     } catch (err: any) {
       console.warn("Analysis failed:", err.message);
     } finally {
       setIsAnalyzing(false);
     }
-  };
+  }, [isAnalyzing]);
 
   const updateTelemetry = async () => {
     try {
@@ -97,15 +99,27 @@ const App: React.FC = () => {
       }
       
       setLogs(prev => {
+        // PRESERVE ATTRIBUTION: Check if we already have an attribution for this incoming date
+        const existingLog = prev.find(l => l.date === latestLog.date);
+        const mergedLog = {
+          ...latestLog,
+          attribution: latestLog.attribution || existingLog?.attribution
+        };
+
         const otherLogs = prev.filter(l => l.date !== latestLog.date);
-        const newLogs = [latestLog, ...otherLogs];
-        
-        if (!latestLog.attribution && !isAnalyzing && !latestLog.errorMessage) {
-          handleRunAnalysis(latestLog);
-        }
-        
-        return newLogs;
+        return [mergedLog, ...otherLogs];
       });
+
+      // AUTO-TRIGGER LOGIC: Run exactly once if data is missing and threshold met
+      // Otherwise, stay idle until user clicks refresh
+      setLogs(currentLogs => {
+        const latest = currentLogs[0];
+        if (latest && !latest.attribution && !isAnalyzing && latest.thresholdMet && !hasAttemptedAutoAnalysis.current.has(latest.date)) {
+           handleRunAnalysis(latest);
+        }
+        return currentLogs;
+      });
+
     } catch (err: any) {
       if (err.message === "BREEZE_SESSION_MISSING") {
         setError({ message: "Breeze Session Required", type: 'token' });
@@ -276,17 +290,27 @@ const App: React.FC = () => {
                 </div>
               ) : (
                 <div className="py-24 text-center space-y-6">
-                  <div className="inline-flex flex-col items-center">
-                    <div className="w-16 h-16 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-6" />
-                    <p className="text-slate-900 font-black uppercase text-xs tracking-[0.3em]">Synthesizing Intelligence Dossier...</p>
-                    <p className="text-slate-400 text-[10px] mt-2 font-bold uppercase tracking-widest">Grounded Google Search Contextualization in Progress</p>
-                    <button 
-                      onClick={() => handleRunAnalysis(latest)} 
-                      className="mt-8 text-indigo-600 font-black text-[10px] uppercase tracking-widest hover:underline"
-                    >
-                      Force Re-Sync
-                    </button>
-                  </div>
+                  {isAnalyzing ? (
+                    <div className="inline-flex flex-col items-center animate-in fade-in duration-500">
+                      <div className="w-16 h-16 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-6" />
+                      <p className="text-slate-900 font-black uppercase text-xs tracking-[0.3em]">Synthesizing Intelligence Dossier...</p>
+                      <p className="text-slate-400 text-[10px] mt-2 font-bold uppercase tracking-widest">Grounded Google Search Contextualization in Progress</p>
+                    </div>
+                  ) : (
+                    <div className="inline-flex flex-col items-center animate-in zoom-in duration-500">
+                      <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center text-slate-300 mb-6">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-8 h-8"><path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" /></svg>
+                      </div>
+                      <p className="text-slate-900 font-black uppercase text-xs tracking-[0.3em]">No Intelligence Logged for Today</p>
+                      <p className="text-slate-400 text-[10px] mt-2 font-bold uppercase tracking-widest">Run the engine to fetch historical session drivers</p>
+                      <button 
+                        onClick={() => handleRunAnalysis(latest)} 
+                        className="mt-8 bg-indigo-600 text-white px-8 py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg shadow-indigo-600/20 hover:scale-105 transition-transform"
+                      >
+                        Run AI Analysis
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

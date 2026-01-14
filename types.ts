@@ -4,10 +4,10 @@ export type MacroCategory = 'Geopolitical' | 'Monetary Policy' | 'Inflation' | '
 
 export interface NewsAttribution {
   headline: string;
-  narrative: string; // Matches 'narrative' in screenshot
+  narrative: string;
   category?: string;
   sentiment: Sentiment;
-  impact_score: number; // Matches 'impact_score' in screenshot
+  impact_score: number;
   sources?: { uri: string; title: string }[];
   affected_stocks?: string[];
   affected_sectors?: string[];
@@ -15,16 +15,16 @@ export interface NewsAttribution {
 
 export interface MarketLog {
   id: string;
-  date: string; // Maps to 'log_date'
-  niftyClose: number; // Maps to 'ltp'
-  niftyChange: number; // Maps to 'points_change'
-  niftyChangePercent: number; // Maps to 'change_percent'
+  date: string;
+  niftyClose: number;
+  niftyChange: number;
+  niftyChangePercent: number;
   thresholdMet: boolean;
   attribution?: NewsAttribution;
   isAnalyzing: boolean;
   dayLow?: number;
   dayHigh?: number;
-  prevClose?: number; // Added to handle telemetry response mismatch
+  prevClose?: number;
   volume?: number;
   dataSource?: string;
   errorMessage?: string; 
@@ -32,7 +32,7 @@ export interface MarketLog {
 
 export interface LedgerSource {
   id: string;
-  ledger_event_id: string;
+  event_id: string; 
   source_name: string;
   url: string;
   snippet?: string;
@@ -42,12 +42,19 @@ export interface LedgerSource {
 
 export interface LedgerEvent {
   id: string;
-  log_date: string; // Matches 'log_date' in screenshot
-  intelligence_summary: string; // Matches 'intelligence_summary' in screenshot
-  impact_score: number; // Matches 'impact_score' in screenshot
-  technical_json: any; // Matches 'technical_json' in screenshot
-  model: string;
+  event_date: string; 
+  ai_attribution_summary: string; 
+  score: number; 
+  reason: string; 
+  nifty_close: number;
+  change_pts: number;
+  macro_reason: string;
+  sentiment: string;
+  llm_raw_json: any; 
+  created_at?: string;
   sources?: LedgerSource[];
+  affected_stocks: string[];
+  affected_sectors: string[];
 }
 
 export type AppTab = 'live' | 'research';

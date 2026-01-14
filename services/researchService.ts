@@ -1,34 +1,56 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { supabase } from "../lib/supabase";
-import { fetchBreezeHistoricalData } from "./breezeService";
 
-const MAX_AI_ANALYSIS_PER_RUN = 50; 
+const MAX_AI_ANALYSIS_PER_RUN = 100; 
 
 let stopRequested = false;
 let isCurrentlyRunning = false;
 
+const extractJson = (text: string) => {
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    const cleaned = text.replace(/```json|```/gi, "").trim();
+    try {
+      return JSON.parse(cleaned);
+    } catch (e2) {
+      console.error("AI Response invalid JSON:", text);
+      return null;
+    }
+  }
+};
+
 /**
- * SEEDING: Injects dates into the volatile_queue.
+ * SEEDING LOGIC: Adds unique dates to the volatile queue.
  */
 export const seedVolatileQueue = async (dates: string[]) => {
   const sanitized = dates
     .map(d => d.trim())
     .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d));
 
-  if (sanitized.length === 0) return;
+  if (sanitized.length === 0) return { added: 0, skipped: 0 };
 
   const { data: existingLedger } = await supabase
     .from('ledger_events')
+    .select('event_date')
+    .in('event_date', sanitized);
+
+  const { data: existingQueue } = await supabase
+    .from('volatile_queue')
     .select('log_date')
     .in('log_date', sanitized);
 
-  const existingDates = new Set(existingLedger?.map(row => row.log_date) || []);
-  const newDatesToQueue = sanitized.filter(d => !existingDates.has(d));
+  const excludeDates = new Set([
+    ...(existingLedger?.map(row => row.event_date) || []),
+    ...(existingQueue?.map(row => row.log_date) || [])
+  ]);
 
-  if (newDatesToQueue.length === 0) return;
+  const newDatesToQueue = sanitized.filter(d => !excludeDates.has(d));
+  const skippedCount = sanitized.length - newDatesToQueue.length;
 
-  // Matches 'log_date' and 'inserted_at' from screenshot
+  if (newDatesToQueue.length === 0) return { added: 0, skipped: skippedCount };
+
   const { error } = await supabase.from('volatile_queue').upsert(
     newDatesToQueue.map(d => ({ 
       log_date: d,
@@ -39,49 +61,52 @@ export const seedVolatileQueue = async (dates: string[]) => {
   );
   
   if (error) throw new Error(error.message);
+  return { added: newDatesToQueue.length, skipped: skippedCount };
+};
+
+/**
+ * DELETION LOGIC: Wipes the entire volatile_queue.
+ */
+export const clearVolatileQueue = async () => {
+  const { error } = await supabase
+    .from("volatile_queue")
+    .delete()
+    .gte("log_date", "1900-01-01"); 
+
+  if (error) throw new Error(error.message);
+  
+  isCurrentlyRunning = false;
+  stopRequested = true;
+  await updateGlobalStatus('idle', 'Audit Queue Purged', null);
+  return true;
 };
 
 export const stopDeepResearch = async () => {
   stopRequested = true;
-  await updateGlobalStatus('idle', 'Engine termination requested...');
+  await updateGlobalStatus('idle', 'Audit Stopping...', null);
 };
 
 /**
- * CAUSAL INTELLIGENCE ENGINE
+ * CAUSAL INTELLIGENCE ENGINE (Gemini Pro)
  */
-export const fetchCombinedIntelligence = async (date: string, technicalData?: any): Promise<any> => {
+export const fetchCombinedIntelligence = async (date: string): Promise<any> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
-  const techSummary = technicalData ? `
-    TECHNICAL ANCHOR FOR ${date}:
-    - Open: ${technicalData.open}
-    - High: ${technicalData.high}
-    - Low: ${technicalData.low}
-    - Close: ${technicalData.close}
-    - Volume: ${technicalData.volume}
-  ` : `DATE: ${date}`;
-
   const prompt = `
-    You are Market Attribution Intelligence (IQ), a forensic market analyst.
-    Task: Explain WHY the Indian Nifty 50 moved on ${date} using grounded web search.
+    You are Market Attribution Intelligence (IQ). 
+    Perform a forensic financial audit for the Nifty 50 Index for the date: ${date}.
     
-    ${techSummary}
-    
-    Requirements:
-    1. Find causal news/events that occurred on that specific date (or prior evening IST).
-    2. Output STRICT JSON only.
-    
-    JSON SCHEMA:
+    OUTPUT SCHEMA (Strict JSON):
     {
-      "close": number,
-      "change": number,
-      "reason_headline": "Short bold headline",
-      "intelligence_summary": "300-500 word technical-causal analysis",
-      "macro_reason": "One of [Geopolitical, Monetary Policy, Inflation, Earnings, Commodities, Global Markets, Domestic Policy, Technical]",
+      "event_date": "${date}",
+      "nifty_close": number,
+      "change_pts": number,
+      "reason": "Main headline string",
+      "macro_reason": "Geopolitical | Monetary Policy | Inflation | Earnings | Commodities | Global Markets | Domestic Policy | Technical",
       "sentiment": "POSITIVE | NEGATIVE | NEUTRAL",
-      "impact_score": 0-100,
-      "affected_sectors": ["sector1"],
-      "affected_stocks": ["STOCK1"]
+      "score": 0-100,
+      "ai_attribution_summary": "Detailed narrative",
+      "affected_stocks": ["NSE symbols"],
+      "affected_sectors": ["Sector names"]
     }
   `;
 
@@ -91,135 +116,174 @@ export const fetchCombinedIntelligence = async (date: string, technicalData?: an
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],
-        responseMimeType: "application/json",
-        thinkingConfig: { thinkingBudget: 4000 }
+        responseMimeType: "application/json"
       }
     });
 
-    const text = response.text;
-    if (!text) return null;
+    const result = extractJson(response.text || "");
+    if (!result) return null;
     
     const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
     const sources = groundingChunks?.map((chunk: any) => ({
       url: chunk.web?.uri,
       title: chunk.web?.title,
       source_name: chunk.web?.title,
-      published_at: new Date().toISOString()
+      published_at: new Date().toISOString(),
+      snippet: chunk.web?.snippet || ""
     })).filter((s: any) => s.url) || [];
 
-    const result = JSON.parse(text);
     return { ...result, sources_used: sources };
   } catch (e) {
-    console.error(`AI Analysis failed for ${date}:`, e);
+    console.error(`Gemini Audit Error (${date}):`, e);
     return null;
   }
 }
 
-export const commitIntelligenceToLedger = async (date: string, data: any) => {
+export const commitIntelligenceToLedger = async (data: any) => {
   const { data: event, error: upsertErr } = await supabase.from('ledger_events').upsert({
-    log_date: date,
-    intelligence_summary: data.intelligence_summary || "Analysis synchronized.",
-    impact_score: data.impact_score || 50,
-    model: 'gemini-3-pro-preview',
-    technical_json: {
-      headline: data.reason_headline,
-      nifty_close: data.close || 0,
-      change_pts: data.change || 0,
-      macro_reason: data.macro_reason || "Technical",
-      sentiment: data.sentiment || "NEUTRAL",
-      affected_stocks: data.affected_stocks || [],
-      affected_sectors: data.affected_sectors || []
-    }
-  }, { onConflict: 'log_date' }).select().single();
+    event_date: data.event_date,
+    ai_attribution_summary: data.ai_attribution_summary,
+    score: data.score || 50,
+    reason: data.reason,
+    nifty_close: data.nifty_close || 0,
+    change_pts: data.change_pts || 0,
+    macro_reason: data.macro_reason || "Technical",
+    sentiment: data.sentiment || "NEUTRAL",
+    affected_stocks: data.affected_stocks || [],
+    affected_sectors: data.affected_sectors || [],
+    llm_raw_json: data
+  }, { onConflict: 'event_date' }).select().single();
 
   if (upsertErr) throw upsertErr;
 
-  if (data.sources_used && data.sources_used.length > 0) {
-    await supabase.from('ledger_sources').delete().eq('ledger_event_id', event.id);
-    
-    const sourcePayload = data.sources_used.map(s => ({
-      ledger_event_id: event.id,
+  if (data.sources_used?.length) {
+    await supabase.from('ledger_sources').delete().eq('event_id', event.id);
+    await supabase.from('ledger_sources').insert(data.sources_used.map((s: any) => ({
+      event_id: event.id,
       url: s.url,
-      source_name: s.source_name || s.title,
+      source_name: s.source_name,
       title: s.title,
-      published_at: s.published_at || new Date().toISOString()
-    }));
-    
-    await supabase.from('ledger_sources').insert(sourcePayload);
+      published_at: s.published_at,
+      snippet: s.snippet
+    })));
   }
 
   return event;
 };
 
-async function updateGlobalStatus(status: 'idle' | 'running' | 'completed' | 'failed', stageMsg: string, activeDate?: string) {
+async function updateGlobalStatus(status: 'idle' | 'running' | 'completed' | 'failed', stageMsg: string, activeDate: string | null) {
+  // Check for session presence to satisfy NOT NULL constraint on breeze_active
+  // Ensure we are definitely passing a boolean, not undefined/null
+  const sessionVal = localStorage.getItem('breeze_api_session');
+  const isBreezeSessionActive = sessionVal !== null && sessionVal !== undefined && sessionVal !== "";
+  
+  const payload = { 
+    id: 1, 
+    status_text: status, 
+    stage: stageMsg, 
+    active_date: activeDate,
+    breeze_active: isBreezeSessionActive,
+    updated_at: new Date().toISOString() 
+  };
+
   try {
-    // Matches 'status_text', 'stage', 'active_date', 'updated_at' from screenshot
-    await supabase.from('research_status').upsert({ 
-      id: 1, 
-      status_text: status, 
-      stage: stageMsg, 
-      active_date: activeDate,
-      updated_at: new Date().toISOString() 
-    }, { onConflict: 'id' });
-  } catch (e) { console.error(e); }
+    // We use update first as it's cleaner for existing rows, falling back to upsert if needed
+    const { error } = await supabase.from('research_status').upsert(payload, { onConflict: 'id' });
+    
+    if (error) {
+      // Improved error visibility
+      console.error("DB Status Update Error Detail:", JSON.stringify(error, null, 2));
+      throw new Error(`DB Error: ${error.message}`);
+    }
+  } catch (e: any) { 
+    console.error("Status Update Exception:", e.message || e);
+    throw e; // Rethrow so the runner knows it failed
+  }
 }
 
+/**
+ * BACKGROUND PROCESS RUNNER
+ */
 export const runDeepResearch = async () => {
-  if (isCurrentlyRunning) return;
+  if (isCurrentlyRunning) {
+    console.log("RUN: Attempted to start while already running.");
+    return;
+  }
+  
   isCurrentlyRunning = true;
   stopRequested = false;
 
   try {
-    const { data: queue } = await supabase
+    // 1. SIGNAL START IMMEDIATELY
+    // This call must succeed for the UI to stay in 'Processing' mode
+    await updateGlobalStatus('running', 'Initializing...', null);
+
+    // 2. CLEANUP: Force delete already audited records from queue
+    const { data: allInQueue } = await supabase.from('volatile_queue').select('log_date');
+    if (allInQueue?.length) {
+      const { data: audited } = await supabase
+        .from('ledger_events')
+        .select('event_date')
+        .in('event_date', allInQueue.map(q => q.log_date));
+      
+      if (audited?.length) {
+        const auditedDates = audited.map(a => a.event_date);
+        console.log(`RUN: Removing ${auditedDates.length} legacy audited dates from queue.`);
+        await supabase.from('volatile_queue').delete().in('log_date', auditedDates);
+      }
+    }
+
+    // 3. FETCH BATCH
+    const { data: targets, error: qErr } = await supabase
       .from('volatile_queue')
       .select('log_date')
-      .eq('status', 'pending')
-      .order('log_date', { ascending: true });
+      .or('status.eq.pending,status.eq.failed')
+      .order('log_date', { ascending: true })
+      .limit(MAX_AI_ANALYSIS_PER_RUN);
 
-    if (!queue || queue.length === 0) {
-      await updateGlobalStatus('idle', 'No queue data found.');
+    if (qErr) throw qErr;
+    if (!targets || targets.length === 0) {
+      console.log("RUN: Target Queue Empty.");
+      await updateGlobalStatus('idle', 'Audit complete. Ledger synchronized.', null);
       isCurrentlyRunning = false;
       return;
     }
 
-    const batch = queue.slice(0, MAX_AI_ANALYSIS_PER_RUN);
-    let processed = 0;
-
-    for (const item of batch) {
-      if (stopRequested) break;
-      const dateStr = item.log_date;
-
-      await updateGlobalStatus('running', `[INGEST] Fetching telemetry...`, dateStr);
-
-      let technical = null;
-      try {
-        technical = await fetchBreezeHistoricalData(dateStr);
-      } catch (e) {
-        console.warn(`Historical fetch failed for ${dateStr}, proceeding with AI fallback.`);
+    let processedCount = 0;
+    for (let i = 0; i < targets.length; i++) {
+      if (stopRequested) {
+        console.log("RUN: Interrupting via Stop Signal.");
+        break;
       }
-
-      await updateGlobalStatus('running', `[AI] Grounded reasoning...`, dateStr);
       
-      const intel = await fetchCombinedIntelligence(dateStr, technical);
-      if (intel) {
-        if (technical) {
-          intel.close = technical.close;
-          intel.change = technical.close - technical.open;
+      const dateStr = targets[i].log_date;
+      const displayMsg = `Auditing: [${i+1}/${targets.length}] - ${dateStr}`;
+      console.log(`RUN: ${displayMsg}`);
+      
+      // Update DB Status per iteration
+      await updateGlobalStatus('running', displayMsg, dateStr);
+      
+      try {
+        const intel = await fetchCombinedIntelligence(dateStr);
+        if (intel) {
+          await commitIntelligenceToLedger(intel);
+          await supabase.from('volatile_queue').delete().eq('log_date', dateStr);
+          processedCount++;
         }
-        await commitIntelligenceToLedger(dateStr, intel);
-        
-        // Update queue status
-        await supabase.from('volatile_queue')
-          .update({ status: 'completed' })
-          .eq('log_date', dateStr);
-          
-        processed++;
+      } catch (err: any) {
+        console.error(`RUN: Failed record ${dateStr}:`, err);
+        await supabase.from('volatile_queue').update({ status: 'failed', last_error: err.message }).eq('log_date', dateStr);
       }
     }
-
-    await updateGlobalStatus('completed', `Batch finished. Processed: ${processed}`);
+    
+    await updateGlobalStatus('idle', stopRequested ? 'Audit Terminated' : `Success: ${processedCount} Audited.`, null);
   } catch (err: any) {
-    await updateGlobalStatus('failed', `Engine Fault: ${err.message}`);
+    console.error("RUN: Engine Crash:", err);
+    // Attempt one final status update to signal failure
+    try {
+      await updateGlobalStatus('failed', `Engine Fault: ${err.message}`, null);
+    } catch (e) {}
+    throw err; // Re-throw to handle in UI
   } finally {
     isCurrentlyRunning = false;
   }
