@@ -108,22 +108,29 @@ export const fetchBreezeNiftyQuote = async (): Promise<BreezeQuote> => {
   
   if (!response.ok) throw new Error(json.message || `Quote fetch failed: ${response.status}`);
 
-  // REVERTED: Working row finding logic from previous stable version
   const row = Array.isArray(json.Success) ? json.Success.find((x: any) => x.exchange_code === "NSE") : null;
   
   if (!row) {
     throw new Error("No NSE quote row returned");
   }
 
+  // Improved extraction logic for Indices: 
+  const ltp = parseFloat(row.ltp || 0);
+  const prevClose = parseFloat(row.previous_close || 0);
+  // Indices often use 'chng' or 'net_change' or just 'change'
+  const changeVal = parseFloat(row.change || row.chng || row.net_change || (ltp - prevClose) || 0);
+  // Volume can be 'total_volume', 'DayVolume', or 'volume'
+  const volumeVal = parseFloat(row.total_volume || row.volume || row.DayVolume || 0);
+
   return {
-    last_traded_price: parseFloat(row.ltp || 0),
-    change: parseFloat(row.change || 0),
-    percent_change: parseFloat(row.ltp_percent_change || 0),
+    last_traded_price: ltp,
+    change: changeVal,
+    percent_change: parseFloat(row.ltp_percent_change || row.chng_per || 0),
     open: parseFloat(row.open || 0),
     high: parseFloat(row.high || 0),
     low: parseFloat(row.low || 0),
-    previous_close: parseFloat(row.previous_close || 0),
-    volume: parseFloat(row.volume || row.DayVolume || 0)
+    previous_close: prevClose,
+    volume: volumeVal
   };
 };
 

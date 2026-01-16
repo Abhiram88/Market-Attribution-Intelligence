@@ -73,7 +73,7 @@ export const ResearchTable: React.FC<ResearchTableProps> = ({ events, onViewDeta
                     </div>
                   </td>
                   <td className="px-6 sm:px-10 py-7 text-center">
-                    <div className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-slate-900 text-white text-[10px] font-black shadow-lg shadow-slate-900/10">
+                    <div className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-[#4F46E5] text-white text-[10px] font-black shadow-lg shadow-indigo-600/20">
                       {e.score || 0}
                     </div>
                   </td>
@@ -89,7 +89,7 @@ export const ResearchTable: React.FC<ResearchTableProps> = ({ events, onViewDeta
                   <td className="px-6 sm:px-10 py-7">
                     <div className="flex flex-wrap gap-1.5 max-w-[180px]">
                       {e.affected_sectors?.length ? e.affected_sectors.slice(0, 3).map((s: string, idx: number) => (
-                        <span key={idx} className="text-[8px] font-bold text-slate-500 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md uppercase">
+                        <span key={idx} className="text-[8px] font-bold text-white bg-[#4F46E5] px-2 py-0.5 rounded-md uppercase">
                           {s}
                         </span>
                       )) : <span className="text-[8px] text-slate-300 font-bold italic uppercase">Pending...</span>}

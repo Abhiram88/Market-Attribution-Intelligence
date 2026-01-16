@@ -24,6 +24,10 @@ export const ResearchTab: React.FC = () => {
   const [macroFilter, setMacroFilter] = useState<string>("All");
   const [sentimentFilter, setSentimentFilter] = useState<string>("All");
   const [searchQuery, setSearchQuery] = useState("");
+  
+  // PAGINATION
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 50;
 
   const fetchEvents = async () => {
     try {
@@ -62,14 +66,12 @@ export const ResearchTab: React.FC = () => {
           active_date: data.active_date || null
         });
         
-        // If we were processing locally but DB says idle/failed, we might be finished
         if (localProcessing && (data.status_text === 'idle' || data.status_text === 'failed')) {
           setLocalProcessing(false);
           setStopping(false);
           fetchEvents();
         }
         
-        // If DB says running, ensure we reflect it locally
         if (data.status_text === 'running' && !localProcessing) {
           setLocalProcessing(true);
         }
@@ -94,18 +96,12 @@ export const ResearchTab: React.FC = () => {
       return;
     }
     
-    console.log("UI: Launching Audit Engine...");
     setLocalProcessing(true);
     setStopping(false);
-    
-    // Optimistic UI state
     setSyncStatus(prev => ({ ...prev, status: 'running', progress_message: 'Engaging Engine...' }));
     
-    // We do NOT await here to keep the UI responsive and show the Stop button instantly.
-    // The background process handles DB status updates.
     runDeepResearch().catch(err => {
       console.error("Background Engine Failed to Start:", err);
-      // Only revert if we haven't already received a 'running' signal from the poller
       setTimeout(() => {
         setLocalProcessing(false);
         setStopping(false);
@@ -114,7 +110,6 @@ export const ResearchTab: React.FC = () => {
   };
 
   const handleStop = async () => {
-    console.log("UI: Sending Stop Signal...");
     setStopping(true);
     setSyncStatus(prev => ({ ...prev, progress_message: 'Terminating...' }));
     try {
@@ -176,6 +171,13 @@ export const ResearchTab: React.FC = () => {
       return matchesMacro && matchesSentiment && matchesSearch;
     });
   }, [events, macroFilter, sentimentFilter, searchQuery]);
+
+  const paginatedEvents = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredEvents.slice(start, start + pageSize);
+  }, [filteredEvents, currentPage]);
+
+  const totalPages = Math.ceil(filteredEvents.length / pageSize);
 
   const isActuallyRunning = localProcessing || syncStatus.status === 'running';
 
@@ -252,13 +254,40 @@ export const ResearchTab: React.FC = () => {
       </div>
       
       <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Search Context</label><input type="text" placeholder="Filter data..." className="w-full bg-slate-50 rounded-xl px-5 py-3.5 text-xs border border-slate-200 outline-none focus:ring-2 ring-indigo-500/10" onChange={e => setSearchQuery(e.target.value)} /></div>
-        <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Macro Driver</label><select className="w-full bg-slate-50 rounded-xl px-5 py-3.5 text-xs border border-slate-200 font-bold uppercase tracking-wider outline-none" onChange={e => setMacroFilter(e.target.value)}><option value="All">All Drivers</option>{['Geopolitical', 'Monetary Policy', 'Inflation', 'Earnings', 'Commodities', 'Global Markets', 'Domestic Policy', 'Technical'].map(m => <option key={m} value={m}>{m}</option>)}</select></div>
-        <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Market Sentiment</label><select className="w-full bg-slate-50 rounded-xl px-5 py-3.5 text-xs border border-slate-200 font-bold uppercase tracking-wider outline-none" onChange={e => setSentimentFilter(e.target.value)}><option value="All">All Sentiment</option><option value="POSITIVE">Positive</option><option value="NEGATIVE">Negative</option><option value="NEUTRAL">Neutral</option></select></div>
+        <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Search Context</label><input type="text" placeholder="Filter data..." className="w-full bg-slate-50 rounded-xl px-5 py-3.5 text-xs border border-slate-200 outline-none focus:ring-2 ring-indigo-500/10" onChange={e => { setSearchQuery(e.target.value); setCurrentPage(1); }} /></div>
+        <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Macro Driver</label><select className="w-full bg-slate-50 rounded-xl px-5 py-3.5 text-xs border border-slate-200 font-bold uppercase tracking-wider outline-none" onChange={e => { setMacroFilter(e.target.value); setCurrentPage(1); }}><option value="All">All Drivers</option>{['Geopolitical', 'Monetary Policy', 'Inflation', 'Earnings', 'Commodities', 'Global Markets', 'Domestic Policy', 'Technical'].map(m => <option key={m} value={m}>{m}</option>)}</select></div>
+        <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Market Sentiment</label><select className="w-full bg-slate-50 rounded-xl px-5 py-3.5 text-xs border border-slate-200 font-bold uppercase tracking-wider outline-none" onChange={e => { setSentimentFilter(e.target.value); setCurrentPage(1); }}><option value="All">All Sentiment</option><option value="POSITIVE">Positive</option><option value="NEGATIVE">Negative</option><option value="NEUTRAL">Neutral</option></select></div>
       </div>
       
-      <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-xl overflow-hidden">
-        <ResearchTable events={filteredEvents} onViewDetails={setSelectedEvent} />
+      <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-xl overflow-hidden flex flex-col">
+        <ResearchTable events={paginatedEvents} onViewDetails={setSelectedEvent} />
+        
+        {totalPages > 1 && (
+          <div className="p-8 bg-slate-50/50 border-t border-slate-100 flex items-center justify-between">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+              Showing {Math.min(filteredEvents.length, (currentPage - 1) * pageSize + 1)} - {Math.min(currentPage * pageSize, filteredEvents.length)} of {filteredEvents.length} records
+            </p>
+            <div className="flex gap-2">
+              <button 
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-black uppercase tracking-widest disabled:opacity-30 hover:bg-slate-50 transition-colors shadow-sm"
+              >
+                Prev
+              </button>
+              <div className="flex items-center px-4">
+                <span className="text-[10px] font-black text-indigo-600">Page {currentPage} of {totalPages}</span>
+              </div>
+              <button 
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-black uppercase tracking-widest disabled:opacity-30 hover:bg-slate-50 transition-colors shadow-sm"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
       
       {selectedEvent && <ResearchDetailModal event={selectedEvent} onClose={() => setSelectedEvent(null)} onUpdate={fetchEvents} />}

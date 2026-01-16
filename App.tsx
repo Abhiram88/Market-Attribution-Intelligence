@@ -99,10 +99,13 @@ const App: React.FC = () => {
       }
       
       setLogs(prev => {
-        // PRESERVE ATTRIBUTION: Check if we already have an attribution for this incoming date
         const existingLog = prev.find(l => l.date === latestLog.date);
+        
+        // Merging ensures we don't lose data if the feed is intermittent
         const mergedLog = {
           ...latestLog,
+          niftyChange: (latestLog.niftyChange !== 0 || !existingLog) ? latestLog.niftyChange : existingLog.niftyChange,
+          volume: (latestLog.volume !== 0 || !existingLog) ? latestLog.volume : (existingLog.volume || 0),
           attribution: latestLog.attribution || existingLog?.attribution
         };
 
@@ -110,8 +113,6 @@ const App: React.FC = () => {
         return [mergedLog, ...otherLogs];
       });
 
-      // AUTO-TRIGGER LOGIC: Run exactly once if data is missing and threshold met
-      // Otherwise, stay idle until user clicks refresh
       setLogs(currentLogs => {
         const latest = currentLogs[0];
         if (latest && !latest.attribution && !isAnalyzing && latest.thresholdMet && !hasAttemptedAutoAnalysis.current.has(latest.date)) {
@@ -131,12 +132,11 @@ const App: React.FC = () => {
   };
 
   const startPolling = () => {
-    if (pollIntervalRef.current) return;
+    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     const session = getMarketSessionStatus();
     updateTelemetry();
-    if (session.isOpen) {
-      pollIntervalRef.current = setInterval(updateTelemetry, 60000); 
-    }
+    // 5 second interval for true real-time feeling
+    pollIntervalRef.current = setInterval(updateTelemetry, 5000); 
   };
 
   const handleAuthComplete = () => {
@@ -176,7 +176,7 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 transition-colors duration-500 font-sans selection:bg-indigo-500/30 overflow-x-hidden w-full flex flex-col">
       <nav className="w-full px-4 sm:px-8 md:px-12 pt-8 pb-6 border-b border-slate-200/60 bg-white sticky top-0 z-[60]">
-        <div className="flex flex-col lg:flex-row justify-between items-center gap-6">
+        <div className="flex flex-col lg:flex-row justify-between items-center gap-6 w-full">
           <div className="flex flex-col items-center lg:items-start group cursor-default">
             <div className="flex items-center gap-4">
               <h1 className="text-2xl sm:text-3xl font-black uppercase tracking-tighter flex items-center gap-3 group-hover:scale-[1.01] transition-transform">
@@ -210,114 +210,116 @@ const App: React.FC = () => {
         </div>
       </nav>
 
-      <main className="flex-1 w-full px-4 sm:px-8 md:px-12 py-8 sm:py-12">
-        {activeTab === 'live' ? (
-          <div className="w-full space-y-12 max-w-7xl mx-auto">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              <div className="h-full min-h-[320px]">
-                <NiftyRealtimeCard 
-                  price={latest.niftyClose} 
-                  change={latest.niftyChange} 
-                  changePercent={latest.niftyChangePercent}
-                  dayHigh={latest.dayHigh}
-                  dayLow={latest.dayLow}
-                  volume={latest.volume}
-                  isPaused={!!error}
-                  dataSource={latest.dataSource}
-                  errorType={error?.type}
-                  errorMessage={error?.message}
-                />
-              </div>
-              <div className="h-full min-h-[320px]">
-                <HistoricalCloseCard logs={logs} />
-              </div>
-            </div>
-
-            {error && (
-              <div className={`p-6 rounded-[2rem] border flex items-center justify-between gap-4 animate-in fade-in slide-in-from-top-2 ${error.type === 'token' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
-                <p className="text-xs font-bold uppercase tracking-wide">{error.message}</p>
-                {error.type === 'token' && (
-                  <button onClick={() => setShowTokenModal(true)} className="bg-indigo-600 text-white px-6 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest shadow-lg shadow-indigo-600/20">Re-Sync Gateway</button>
-                )}
-              </div>
-            )}
-
-            <div className="bg-white p-10 sm:p-14 rounded-[3.5rem] border border-slate-200 shadow-2xl relative overflow-hidden group">
-              {todayAttr ? (
-                <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
-                  <div className="flex items-start justify-between mb-8">
-                    <div className="flex items-center gap-5">
-                      <div className={`w-3 h-10 rounded-full ${latest.niftyChange >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-                      <h2 className="text-3xl sm:text-5xl font-black text-slate-900 tracking-tight leading-tight uppercase max-w-4xl">{todayAttr.headline}</h2>
-                    </div>
-                    <button 
-                      onClick={() => handleRunAnalysis(latest)} 
-                      disabled={isAnalyzing}
-                      className="p-4 bg-slate-50 hover:bg-indigo-50 text-indigo-600 rounded-2xl border border-slate-200 transition-all shadow-sm group/sync"
-                      title="Sync Today's News Intelligence"
-                    >
-                       {isAnalyzing ? (
-                         <div className="w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-                       ) : (
-                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-5 h-5 group-hover/sync:rotate-180 transition-transform duration-500">
-                           <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-                         </svg>
-                       )}
-                    </button>
-                  </div>
-                  <div className="prose prose-slate max-w-none">
-                     <p className="text-slate-600 text-lg sm:text-xl leading-relaxed font-medium whitespace-pre-wrap">{todayAttr.narrative}</p>
-                  </div>
-                  
-                  <div className="mt-12 pt-10 border-t border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-end gap-10">
-                     <div className="space-y-4">
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Core Sentiment Alignment</p>
-                        <div className={`inline-flex items-center justify-center px-6 py-3 rounded-2xl text-[11px] font-black uppercase tracking-[0.2em] border shadow-sm ${
-                          todayAttr.sentiment === 'POSITIVE' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'
-                        }`}>
-                          {todayAttr.sentiment}
-                        </div>
-                     </div>
-                     <div className="space-y-4 text-left md:text-right">
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Impacted Equities</p>
-                        <div className="flex flex-wrap md:justify-end gap-2">
-                           {todayAttr.affected_stocks?.map(s => (
-                             <span key={s} className="px-4 py-2 bg-slate-900 text-white text-[10px] font-black rounded-xl uppercase tracking-widest hover:bg-indigo-600 transition-colors cursor-default">{s}</span>
-                           ))}
-                        </div>
-                     </div>
-                  </div>
+      <main className="flex-1 w-full px-4 sm:px-8 md:px-12 py-8 sm:py-12 flex flex-col items-center">
+        <div className="w-full max-w-[100%] mx-auto">
+          {activeTab === 'live' ? (
+            <div className="w-full space-y-12 animate-in fade-in duration-700">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full">
+                <div className="min-h-[320px]">
+                  <NiftyRealtimeCard 
+                    price={latest.niftyClose} 
+                    change={latest.niftyChange} 
+                    changePercent={latest.niftyChangePercent}
+                    dayHigh={latest.dayHigh}
+                    dayLow={latest.dayLow}
+                    volume={latest.volume}
+                    isPaused={!!error}
+                    dataSource={latest.dataSource}
+                    errorType={error?.type}
+                    errorMessage={error?.message}
+                  />
                 </div>
-              ) : (
-                <div className="py-24 text-center space-y-6">
-                  {isAnalyzing ? (
-                    <div className="inline-flex flex-col items-center animate-in fade-in duration-500">
-                      <div className="w-16 h-16 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-6" />
-                      <p className="text-slate-900 font-black uppercase text-xs tracking-[0.3em]">Synthesizing Intelligence Dossier...</p>
-                      <p className="text-slate-400 text-[10px] mt-2 font-bold uppercase tracking-widest">Grounded Google Search Contextualization in Progress</p>
-                    </div>
-                  ) : (
-                    <div className="inline-flex flex-col items-center animate-in zoom-in duration-500">
-                      <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center text-slate-300 mb-6">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-8 h-8"><path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" /></svg>
-                      </div>
-                      <p className="text-slate-900 font-black uppercase text-xs tracking-[0.3em]">No Intelligence Logged for Today</p>
-                      <p className="text-slate-400 text-[10px] mt-2 font-bold uppercase tracking-widest">Run the engine to fetch historical session drivers</p>
-                      <button 
-                        onClick={() => handleRunAnalysis(latest)} 
-                        className="mt-8 bg-indigo-600 text-white px-8 py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg shadow-indigo-600/20 hover:scale-105 transition-transform"
-                      >
-                        Run AI Analysis
-                      </button>
-                    </div>
+                <div className="min-h-[320px]">
+                  <HistoricalCloseCard logs={logs} />
+                </div>
+              </div>
+
+              {error && (
+                <div className={`p-6 rounded-[2rem] border flex items-center justify-between gap-4 animate-in fade-in slide-in-from-top-2 w-full ${error.type === 'token' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
+                  <p className="text-xs font-bold uppercase tracking-wide">{error.message}</p>
+                  {error.type === 'token' && (
+                    <button onClick={() => setShowTokenModal(true)} className="bg-indigo-600 text-white px-6 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest shadow-lg shadow-indigo-600/20">Re-Sync Gateway</button>
                   )}
                 </div>
               )}
+
+              <div className="bg-white p-10 sm:p-14 rounded-[3.5rem] border border-slate-200 shadow-2xl relative overflow-hidden group w-full">
+                {todayAttr ? (
+                  <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
+                    <div className="flex items-start justify-between mb-8">
+                      <div className="flex items-center gap-5">
+                        <div className={`w-3 h-10 rounded-full ${latest.niftyChange >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                        <h2 className="text-3xl sm:text-5xl font-black text-slate-900 tracking-tight leading-tight uppercase max-w-4xl">{todayAttr.headline}</h2>
+                      </div>
+                      <button 
+                        onClick={() => handleRunAnalysis(latest)} 
+                        disabled={isAnalyzing}
+                        className="p-4 bg-slate-50 hover:bg-indigo-50 text-indigo-600 rounded-2xl border border-slate-200 transition-all shadow-sm group/sync"
+                        title="Sync Today's News Intelligence"
+                      >
+                         {isAnalyzing ? (
+                           <div className="w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                         ) : (
+                           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-5 h-5 group-hover/sync:rotate-180 transition-transform duration-500">
+                             <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                           </svg>
+                         )}
+                      </button>
+                    </div>
+                    <div className="prose prose-slate max-w-none">
+                       <p className="text-slate-600 text-lg sm:text-xl leading-relaxed font-medium whitespace-pre-wrap">{todayAttr.narrative}</p>
+                    </div>
+                    
+                    <div className="mt-12 pt-10 border-t border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-end gap-10">
+                       <div className="space-y-4">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Core Sentiment Alignment</p>
+                          <div className={`inline-flex items-center justify-center px-6 py-3 rounded-2xl text-[11px] font-black uppercase tracking-[0.2em] border shadow-sm ${
+                            todayAttr.sentiment === 'POSITIVE' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'
+                          }`}>
+                            {todayAttr.sentiment}
+                          </div>
+                       </div>
+                       <div className="space-y-4 text-left md:text-right">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Impacted Equities</p>
+                          <div className="flex flex-wrap md:justify-end gap-2">
+                             {todayAttr.affected_stocks?.map(s => (
+                               <span key={s} className="px-4 py-2 bg-[#4F46E5] text-white text-[10px] font-black rounded-xl uppercase tracking-widest hover:bg-indigo-700 transition-colors cursor-default">{s}</span>
+                             ))}
+                          </div>
+                       </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="py-24 text-center space-y-6">
+                    {isAnalyzing ? (
+                      <div className="inline-flex flex-col items-center animate-in fade-in duration-500">
+                        <div className="w-16 h-16 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-6" />
+                        <p className="text-slate-900 font-black uppercase text-xs tracking-[0.3em]">Synthesizing Intelligence Dossier...</p>
+                        <p className="text-slate-400 text-[10px] mt-2 font-bold uppercase tracking-widest">Grounded Google Search Contextualization in Progress</p>
+                      </div>
+                    ) : (
+                      <div className="inline-flex flex-col items-center animate-in zoom-in duration-500">
+                        <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center text-slate-300 mb-6">
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-8 h-8"><path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" /></svg>
+                        </div>
+                        <p className="text-slate-900 font-black uppercase text-xs tracking-[0.3em]">No Intelligence Logged for Today</p>
+                        <p className="text-slate-400 text-[10px] mt-2 font-bold uppercase tracking-widest">Run the engine to fetch historical session drivers</p>
+                        <button 
+                          onClick={() => handleRunAnalysis(latest)} 
+                          className="mt-8 bg-indigo-600 text-white px-8 py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg shadow-indigo-600/20 hover:scale-105 transition-transform"
+                        >
+                          Run AI Analysis
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        ) : (
-          <ResearchTab />
-        )}
+          ) : (
+            <ResearchTab />
+          )}
+        </div>
       </main>
 
       {showTokenModal && (

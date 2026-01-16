@@ -91,23 +91,18 @@ export const stopDeepResearch = async () => {
  */
 export const fetchCombinedIntelligence = async (date: string): Promise<any> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  
   const prompt = `
-    You are Market Attribution Intelligence (IQ). 
-    Perform a forensic financial audit for the Nifty 50 Index for the date: ${date}.
+    You are a Senior Market Attribution Analyst (IQ). 
+    Perform a deep-dive forensic financial audit for the Nifty 50 Index on: ${date}.
     
-    OUTPUT SCHEMA (Strict JSON):
-    {
-      "event_date": "${date}",
-      "nifty_close": number,
-      "change_pts": number,
-      "reason": "Main headline string",
-      "macro_reason": "Geopolitical | Monetary Policy | Inflation | Earnings | Commodities | Global Markets | Domestic Policy | Technical",
-      "sentiment": "POSITIVE | NEGATIVE | NEUTRAL",
-      "score": 0-100,
-      "ai_attribution_summary": "Detailed narrative",
-      "affected_stocks": ["NSE symbols"],
-      "affected_sectors": ["Sector names"]
-    }
+    RESEARCH OBJECTIVES:
+    1. Determine the closing price and change points for this specific date.
+    2. Identify the primary macro driver (e.g., Monetary Policy, Geopolitics).
+    3. Synthesize a detailed causal narrative explaining WHY the index moved.
+    4. List specific NSE stocks and sectors most impacted.
+    
+    Ensure the data is historically accurate for ${date}.
   `;
 
   try {
@@ -116,7 +111,28 @@ export const fetchCombinedIntelligence = async (date: string): Promise<any> => {
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],
-        responseMimeType: "application/json"
+        thinkingConfig: { thinkingBudget: 4000 },
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            event_date: { type: Type.STRING },
+            nifty_close: { type: Type.NUMBER, description: "The closing value of the Nifty 50 on this date" },
+            change_pts: { type: Type.NUMBER, description: "Point change from previous session" },
+            reason: { type: Type.STRING, description: "A punchy headline for the session's narrative" },
+            macro_reason: { 
+              type: Type.STRING, 
+              enum: ["Geopolitical", "Monetary Policy", "Inflation", "Earnings", "Commodities", "Global Markets", "Domestic Policy", "Technical"],
+              description: "The primary driver category"
+            },
+            sentiment: { type: Type.STRING, enum: ["POSITIVE", "NEGATIVE", "NEUTRAL"] },
+            score: { type: Type.NUMBER, description: "Volatility impact score 0-100" },
+            ai_attribution_summary: { type: Type.STRING, description: "A detailed forensic narrative of minimum 200 words" },
+            affected_stocks: { type: Type.ARRAY, items: { type: Type.STRING }, description: "NSE Stock Symbols" },
+            affected_sectors: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Sector names impacted" }
+          },
+          required: ["event_date", "nifty_close", "change_pts", "reason", "macro_reason", "sentiment", "ai_attribution_summary"]
+        }
       }
     });
 
@@ -133,8 +149,8 @@ export const fetchCombinedIntelligence = async (date: string): Promise<any> => {
     })).filter((s: any) => s.url) || [];
 
     return { ...result, sources_used: sources };
-  } catch (e) {
-    console.error(`Gemini Audit Error (${date}):`, e);
+  } catch (e: any) {
+    console.error(`Gemini Audit Error (${date}):`, JSON.stringify(e, null, 2));
     return null;
   }
 }
@@ -173,7 +189,6 @@ export const commitIntelligenceToLedger = async (data: any) => {
 
 async function updateGlobalStatus(status: 'idle' | 'running' | 'completed' | 'failed', stageMsg: string, activeDate: string | null) {
   // Check for session presence to satisfy NOT NULL constraint on breeze_active
-  // Ensure we are definitely passing a boolean, not undefined/null
   const sessionVal = localStorage.getItem('breeze_api_session');
   const isBreezeSessionActive = sessionVal !== null && sessionVal !== undefined && sessionVal !== "";
   
@@ -187,17 +202,15 @@ async function updateGlobalStatus(status: 'idle' | 'running' | 'completed' | 'fa
   };
 
   try {
-    // We use update first as it's cleaner for existing rows, falling back to upsert if needed
     const { error } = await supabase.from('research_status').upsert(payload, { onConflict: 'id' });
     
     if (error) {
-      // Improved error visibility
       console.error("DB Status Update Error Detail:", JSON.stringify(error, null, 2));
       throw new Error(`DB Error: ${error.message}`);
     }
   } catch (e: any) { 
     console.error("Status Update Exception:", e.message || e);
-    throw e; // Rethrow so the runner knows it failed
+    throw e;
   }
 }
 
@@ -215,7 +228,6 @@ export const runDeepResearch = async () => {
 
   try {
     // 1. SIGNAL START IMMEDIATELY
-    // This call must succeed for the UI to stay in 'Processing' mode
     await updateGlobalStatus('running', 'Initializing...', null);
 
     // 2. CLEANUP: Force delete already audited records from queue
@@ -279,11 +291,10 @@ export const runDeepResearch = async () => {
     await updateGlobalStatus('idle', stopRequested ? 'Audit Terminated' : `Success: ${processedCount} Audited.`, null);
   } catch (err: any) {
     console.error("RUN: Engine Crash:", err);
-    // Attempt one final status update to signal failure
     try {
       await updateGlobalStatus('failed', `Engine Fault: ${err.message}`, null);
     } catch (e) {}
-    throw err; // Re-throw to handle in UI
+    throw err;
   } finally {
     isCurrentlyRunning = false;
   }
