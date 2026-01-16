@@ -2,6 +2,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { LogDetailModal } from './components/LogDetailModal';
 import { ResearchTab } from './components/ResearchTab';
+import { Reg30Tab } from './components/Reg30Tab';
 import { NiftyRealtimeCard } from './components/NiftyRealtimeCard';
 import { HistoricalCloseCard } from './components/HistoricalCloseCard';
 import { BreezeTokenModal } from './components/BreezeTokenModal';
@@ -20,6 +21,7 @@ const App: React.FC = () => {
   const [showTokenModal, setShowTokenModal] = useState(false);
   
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isUpdatingRef = useRef(false);
   const hasAttemptedAutoAnalysis = useRef<Set<string>>(new Set());
 
   const fetchHistory = async () => {
@@ -82,11 +84,15 @@ const App: React.FC = () => {
   }, [isAnalyzing]);
 
   const updateTelemetry = async () => {
+    if (isUpdatingRef.current) return;
+    isUpdatingRef.current = true;
+    
     try {
       const health = await checkProxyHealth();
       if (health.ok && !health.session_token_set) {
         setError({ message: "Breeze Session Required", type: 'token' });
         setShowTokenModal(true);
+        isUpdatingRef.current = false;
         return;
       }
 
@@ -101,10 +107,10 @@ const App: React.FC = () => {
       setLogs(prev => {
         const existingLog = prev.find(l => l.date === latestLog.date);
         
-        // Merging ensures we don't lose data if the feed is intermittent
+        // Instant Merging: Always prioritize the newest non-zero data
         const mergedLog = {
           ...latestLog,
-          niftyChange: (latestLog.niftyChange !== 0 || !existingLog) ? latestLog.niftyChange : existingLog.niftyChange,
+          niftyChange: (latestLog.niftyChange !== 0 || !existingLog) ? latestLog.niftyChange : (existingLog.niftyChange || 0),
           volume: (latestLog.volume !== 0 || !existingLog) ? latestLog.volume : (existingLog.volume || 0),
           attribution: latestLog.attribution || existingLog?.attribution
         };
@@ -128,15 +134,16 @@ const App: React.FC = () => {
       } else if (!err.message.includes("Unexpected token '<'")) {
         setError({ message: `Telemetry Link Failure: ${err.message}`, type: 'generic' });
       }
+    } finally {
+      isUpdatingRef.current = false;
     }
   };
 
   const startPolling = () => {
     if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-    const session = getMarketSessionStatus();
     updateTelemetry();
-    // 5 second interval for true real-time feeling
-    pollIntervalRef.current = setInterval(updateTelemetry, 5000); 
+    // 2 second high-frequency poll for a "Real-time" feel
+    pollIntervalRef.current = setInterval(updateTelemetry, 2000); 
   };
 
   const handleAuthComplete = () => {
@@ -188,7 +195,7 @@ const App: React.FC = () => {
               {isBreezeConnected && (
                 <div className="hidden sm:flex items-center gap-2 bg-emerald-50 border border-emerald-100 px-3 py-1.5 rounded-full animate-in fade-in zoom-in duration-500">
                   <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
-                  <span className="text-[9px] font-black text-emerald-600 uppercase tracking-widest">LIVE LINK</span>
+                  <span className="text-[9px] font-black text-emerald-600 uppercase tracking-widest">REAL-TIME LINK</span>
                 </div>
               )}
             </div>
@@ -204,8 +211,9 @@ const App: React.FC = () => {
           </div>
 
           <div className="flex bg-slate-100/80 p-1 rounded-2xl border border-slate-200/50">
-            <button onClick={() => setActiveTab('live')} className={`px-8 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'live' ? 'bg-white text-indigo-600 shadow-sm border border-slate-200' : 'text-slate-500'}`}>Live Monitor</button>
-            <button onClick={() => setActiveTab('research')} className={`px-8 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'research' ? 'bg-white text-indigo-600 shadow-sm border border-slate-200' : 'text-slate-500'}`}>Research</button>
+            <button onClick={() => setActiveTab('live')} className={`px-6 sm:px-8 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'live' ? 'bg-white text-indigo-600 shadow-sm border border-slate-200' : 'text-slate-500'}`}>Monitor</button>
+            <button onClick={() => setActiveTab('research')} className={`px-6 sm:px-8 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'research' ? 'bg-white text-indigo-600 shadow-sm border border-slate-200' : 'text-slate-500'}`}>Research</button>
+            <button onClick={() => setActiveTab('reg30')} className={`px-6 sm:px-8 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'reg30' ? 'bg-white text-indigo-600 shadow-sm border border-slate-200' : 'text-slate-500'}`}>Reg30</button>
           </div>
         </div>
       </nav>
@@ -316,8 +324,10 @@ const App: React.FC = () => {
                 )}
               </div>
             </div>
-          ) : (
+          ) : activeTab === 'research' ? (
             <ResearchTab />
+          ) : (
+            <Reg30Tab />
           )}
         </div>
       </main>

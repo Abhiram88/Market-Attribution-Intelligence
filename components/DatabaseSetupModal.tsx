@@ -8,7 +8,7 @@ interface DatabaseSetupModalProps {
 export const DatabaseSetupModal: React.FC<DatabaseSetupModalProps> = ({ onClose }) => {
   const [copied, setCopied] = useState(false);
 
-  const fullSql = `-- CORE MARKET DATA
+  const fullSql = `-- 1) Core Market Logs
 CREATE TABLE IF NOT EXISTS market_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   log_date DATE UNIQUE NOT NULL,
@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS market_logs (
   updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- NEWS ATTRIBUTION
+-- 2) News Attribution
 CREATE TABLE IF NOT EXISTS news_attribution (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   market_log_id UUID REFERENCES market_logs(id) ON DELETE CASCADE,
@@ -35,7 +35,78 @@ CREATE TABLE IF NOT EXISTS news_attribution (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- RESEARCH LEDGER (EXACT SCHEMA REQUESTED)
+-- 3) REG30 Ingestion Runs
+CREATE TABLE IF NOT EXISTS ingestion_runs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_type TEXT NOT NULL,              -- 'CSV' or 'LIVE_SEARCH'
+  started_at TIMESTAMPTZ DEFAULT now(),
+  completed_at TIMESTAMPTZ,
+  source_notes TEXT,
+  status TEXT NOT NULL DEFAULT 'RUNNING'  -- RUNNING|SUCCESS|FAILED
+);
+
+-- 4) Normalized Event Candidates
+CREATE TABLE IF NOT EXISTS event_candidates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  ingestion_run_id UUID REFERENCES ingestion_runs(id) ON DELETE SET NULL,
+  source TEXT NOT NULL,                
+  event_date DATE,
+  event_datetime TIMESTAMPTZ,
+  symbol TEXT,
+  company_name TEXT,
+  event_family TEXT,                   
+  stage_hint TEXT,                     
+  category TEXT,                       
+  raw_text TEXT,
+  link TEXT,
+  dedupe_key TEXT,                     
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_candidates_symbol_date ON event_candidates(symbol, event_date);
+CREATE INDEX IF NOT EXISTS idx_event_candidates_dedupe ON event_candidates(dedupe_key);
+
+-- 5) Analyzed Events (Final Reports)
+CREATE TABLE IF NOT EXISTS analyzed_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  ingestion_run_id UUID REFERENCES ingestion_runs(id) ON DELETE SET NULL,
+  candidate_id UUID REFERENCES event_candidates(id) ON DELETE SET NULL,
+  event_date DATE NOT NULL,
+  event_datetime TIMESTAMPTZ,
+  symbol TEXT,
+  company_name TEXT,
+  source TEXT NOT NULL,                
+  event_family TEXT NOT NULL,          
+  stage TEXT,                          
+  summary TEXT,
+  direction TEXT,                      
+  confidence NUMERIC,                  
+  impact_score NUMERIC,                
+  action_recommendation TEXT,          
+  extracted_json JSONB,                
+  evidence_spans JSONB,                
+  missing_fields JSONB,                
+  market_cap_cr NUMERIC,
+  pat_cr NUMERIC,
+  networth_cr NUMERIC,
+  source_link TEXT,
+  verified_on_nse BOOLEAN DEFAULT FALSE,
+  event_fingerprint TEXT NOT NULL,     
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_analyzed_event_fingerprint ON analyzed_events(event_fingerprint);
+
+-- 6) Gemini Response Cache
+CREATE TABLE IF NOT EXISTS gemini_cache (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  cache_key TEXT UNIQUE NOT NULL,
+  response_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- 7) Research Ledger
 CREATE TABLE IF NOT EXISTS ledger_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   event_date DATE UNIQUE NOT NULL,
@@ -63,20 +134,13 @@ CREATE TABLE IF NOT EXISTS ledger_sources (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- PROCESSING INFRASTRUCTURE
+-- 8) Infra Tables
 CREATE TABLE IF NOT EXISTS volatile_queue (
   log_date DATE PRIMARY KEY,
   inserted_at TIMESTAMPTZ DEFAULT now(),
   status TEXT DEFAULT 'pending',
   last_error TEXT
 );
-
--- DISABLE RLS TO ENSURE APP CAN DELETE/WIPE QUEUE
-ALTER TABLE volatile_queue DISABLE ROW LEVEL SECURITY;
-ALTER TABLE market_logs DISABLE ROW LEVEL SECURITY;
-ALTER TABLE news_attribution DISABLE ROW LEVEL SECURITY;
-ALTER TABLE ledger_events DISABLE ROW LEVEL SECURITY;
-ALTER TABLE ledger_sources DISABLE ROW LEVEL SECURITY;
 
 CREATE TABLE IF NOT EXISTS research_status (
   id INTEGER PRIMARY KEY,
@@ -87,10 +151,21 @@ CREATE TABLE IF NOT EXISTS research_status (
   updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- Mandatory row for the Intelligence Monitor
 INSERT INTO research_status (id, status_text, stage, breeze_active) 
 VALUES (1, 'idle', 'Engine Ready', false) 
-ON CONFLICT (id) DO NOTHING;`;
+ON CONFLICT (id) DO NOTHING;
+
+-- DISABLE RLS
+ALTER TABLE volatile_queue DISABLE ROW LEVEL SECURITY;
+ALTER TABLE market_logs DISABLE ROW LEVEL SECURITY;
+ALTER TABLE news_attribution DISABLE ROW LEVEL SECURITY;
+ALTER TABLE ledger_events DISABLE ROW LEVEL SECURITY;
+ALTER TABLE ledger_sources DISABLE ROW LEVEL SECURITY;
+ALTER TABLE ingestion_runs DISABLE ROW LEVEL SECURITY;
+ALTER TABLE event_candidates DISABLE ROW LEVEL SECURITY;
+ALTER TABLE analyzed_events DISABLE ROW LEVEL SECURITY;
+ALTER TABLE gemini_cache DISABLE ROW LEVEL SECURITY;
+ALTER TABLE research_status DISABLE ROW LEVEL SECURITY;`;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(fullSql);
@@ -103,9 +178,9 @@ ON CONFLICT (id) DO NOTHING;`;
       <div className="bg-white w-full max-w-4xl max-h-[90vh] rounded-[3rem] shadow-2xl overflow-hidden border border-slate-100 flex flex-col">
         <div className="p-8 bg-slate-900 text-white flex justify-between items-center">
           <div>
-            <h2 className="text-2xl font-black tracking-tight uppercase">Database Schema Setup</h2>
+            <h2 className="text-2xl font-black tracking-tight uppercase">Database Setup (Reg30 Edition)</h2>
             <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-1">
-              Synchronize Ledger Architecture
+              Paste this SQL into Supabase Query Editor
             </p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors">
