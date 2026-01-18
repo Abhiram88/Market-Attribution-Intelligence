@@ -63,9 +63,6 @@ CREATE TABLE IF NOT EXISTS event_candidates (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_event_candidates_symbol_date ON event_candidates(symbol, event_date);
-CREATE INDEX IF NOT EXISTS idx_event_candidates_dedupe ON event_candidates(dedupe_key);
-
 -- 5) Analyzed Events (Final Reports)
 CREATE TABLE IF NOT EXISTS analyzed_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -86,10 +83,23 @@ CREATE TABLE IF NOT EXISTS analyzed_events (
   extracted_json JSONB,                
   evidence_spans JSONB,                
   missing_fields JSONB,                
+  scoring_factors JSONB,               
+  
+  -- NEW EVENT ANALYSIS COLUMNS
+  event_analysis_text TEXT,
+  institutional_risk TEXT,  -- LOW|MED|HIGH
+  policy_bias TEXT,         -- TAILWIND|HEADWIND|NEUTRAL
+  policy_event TEXT,
+  tactical_plan TEXT,       -- BUY_DIP|WAIT_CONFIRMATION|MOMENTUM_OK|AVOID_CHASE
+  trigger_text TEXT,
+  analysis_updated_at TIMESTAMPTZ DEFAULT now(),
+
   market_cap_cr NUMERIC,
   pat_cr NUMERIC,
   networth_cr NUMERIC,
   source_link TEXT,
+  attachment_link TEXT,
+  attachment_text TEXT,
   verified_on_nse BOOLEAN DEFAULT FALSE,
   event_fingerprint TEXT NOT NULL,     
   created_at TIMESTAMPTZ DEFAULT now(),
@@ -97,6 +107,15 @@ CREATE TABLE IF NOT EXISTS analyzed_events (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_analyzed_event_fingerprint ON analyzed_events(event_fingerprint);
+
+-- MIGRATION SCRIPT
+-- ALTER TABLE analyzed_events ADD COLUMN IF NOT EXISTS event_analysis_text TEXT;
+-- ALTER TABLE analyzed_events ADD COLUMN IF NOT EXISTS institutional_risk TEXT;
+-- ALTER TABLE analyzed_events ADD COLUMN IF NOT EXISTS policy_bias TEXT;
+-- ALTER TABLE analyzed_events ADD COLUMN IF NOT EXISTS policy_event TEXT;
+-- ALTER TABLE analyzed_events ADD COLUMN IF NOT EXISTS tactical_plan TEXT;
+-- ALTER TABLE analyzed_events ADD COLUMN IF NOT EXISTS trigger_text TEXT;
+-- ALTER TABLE analyzed_events ADD COLUMN IF NOT EXISTS analysis_updated_at TIMESTAMPTZ DEFAULT now();
 
 -- 6) Gemini Response Cache
 CREATE TABLE IF NOT EXISTS gemini_cache (
@@ -151,10 +170,6 @@ CREATE TABLE IF NOT EXISTS research_status (
   updated_at TIMESTAMPTZ DEFAULT now()
 );
 
-INSERT INTO research_status (id, status_text, stage, breeze_active) 
-VALUES (1, 'idle', 'Engine Ready', false) 
-ON CONFLICT (id) DO NOTHING;
-
 -- DISABLE RLS
 ALTER TABLE volatile_queue DISABLE ROW LEVEL SECURITY;
 ALTER TABLE market_logs DISABLE ROW LEVEL SECURITY;
@@ -178,9 +193,9 @@ ALTER TABLE research_status DISABLE ROW LEVEL SECURITY;`;
       <div className="bg-white w-full max-w-4xl max-h-[90vh] rounded-[3rem] shadow-2xl overflow-hidden border border-slate-100 flex flex-col">
         <div className="p-8 bg-slate-900 text-white flex justify-between items-center">
           <div>
-            <h2 className="text-2xl font-black tracking-tight uppercase">Database Setup (Reg30 Edition)</h2>
+            <h2 className="text-2xl font-black tracking-tight uppercase">Database Setup (Forensic Edition)</h2>
             <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-1">
-              Paste this SQL into Supabase Query Editor
+              Updated with Tactical Event Analysis Columns
             </p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors">
@@ -205,12 +220,8 @@ ALTER TABLE research_status DISABLE ROW LEVEL SECURITY;`;
             </pre>
           </div>
         </div>
-
         <div className="p-8 bg-white border-t border-slate-100 flex justify-end">
-          <button 
-            onClick={onClose}
-            className="px-10 py-4 rounded-2xl bg-slate-900 text-white font-black text-[10px] uppercase tracking-widest transition-all hover:bg-indigo-600"
-          >
+          <button onClick={onClose} className="px-10 py-4 rounded-2xl bg-slate-900 text-white font-black text-[10px] uppercase tracking-widest transition-all hover:bg-indigo-600">
             I've Updated My Database
           </button>
         </div>

@@ -7,266 +7,177 @@ import {
   Sentiment, 
   ActionRecommendation 
 } from "../types";
-import { analyzeReg30Event } from "./reg30GeminiService";
+import { analyzeReg30Event, analyzeEventNarrative } from "./reg30GeminiService";
 import { supabase } from "../lib/supabase";
 
 /**
- * ROBUST HELPERS
+ * PROXY RESOLUTION
+ */
+const DEFAULT_BREEZE_PROXY = "https://breeze-proxy-919207294606.us-west1.run.app";
+
+const resolveBreezeUrl = (endpoint: string) => {
+  const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  let base = localStorage.getItem('breeze_proxy_url') || DEFAULT_BREEZE_PROXY;
+  base = base.trim().replace(/\/$/, "");
+  if (!base.startsWith('http')) base = `https://${base}`;
+  return `${base}${path}`;
+};
+
+/**
+ * UTILS
  */
 const s = (v: any) => (v === null || v === undefined ? "" : String(v)).trim();
 const lower = (v: any) => s(v).toLowerCase();
 
-const normalizeHeader = (h: string) =>
-  (h ?? "")
-    .replace(/\uFEFF/g, "")        // remove BOM
-    .replace(/\r?\n/g, " ")        // remove newlines
-    .replace(/\s+/g, " ")          // collapse whitespace
-    .replace(/^"+|"+$/g, "")       // strip surrounding quotes
-    .trim();
-
-const clamp = (val: number, min: number, max: number) => Math.min(Math.max(val, min), max);
-
-/**
- * STABLE HASH HELPER (Simplified SHA-256 substitute for client-side)
- */
 const getStringHash = (str: string) => {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i);
     hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
+    hash = hash & hash;
   }
   return Math.abs(hash).toString(16);
 };
 
 /**
- * DETERMINISTIC SCORING ENGINE
+ * ATTACHMENT PARSER
  */
+export const fetchAttachmentText = async (url: string): Promise<string> => {
+  if (!url) return "";
+  try {
+    const parserEndpoint = resolveBreezeUrl('/api/attachment/parse');
+    const response = await fetch(parserEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+    if (!response.ok) return "";
+    const data = await response.json();
+    return data.text || "";
+  } catch (err) {
+    return "";
+  }
+};
+
 const calculateScoreAndRecommendation = (
   family: Reg30EventFamily, 
   extracted: any, 
   confidence: number,
   mCapCr: number | null
-): { impact_score: number; direction: Sentiment; recommendation: ActionRecommendation } => {
+): { impact_score: number; direction: Sentiment; recommendation: ActionRecommendation; factors: string[] } => {
   let impact_score = 0;
   let direction: Sentiment = 'NEUTRAL';
+  const factors: string[] = [];
 
-  const getRelativeSize = (val: number) => mCapCr ? clamp((val / mCapCr) * 100 * 3, 0, 60) : 20;
+  const addFactor = (pts: number, msg: string) => {
+    impact_score += pts;
+    factors.push(`${pts >= 0 ? '+' : ''}${pts}: ${msg}`);
+  };
 
   switch (family) {
     case 'ORDER_CONTRACT':
     case 'ORDER_PIPELINE': {
       direction = 'POSITIVE';
-      const base = family === 'ORDER_CONTRACT' ? 10 : 8;
-      const relSize = extracted.order_value_cr ? getRelativeSize(extracted.order_value_cr) : 20;
-      const stageBonus = 
-        extracted.stage === 'LOA' ? 15 : 
-        extracted.stage === 'WO' ? 12 : 
-        extracted.stage === 'NTP' ? 10 : 
-        extracted.stage === 'L1' ? 8 : 5;
-      const boosters = (extracted.international ? 5 : 0) + (extracted.new_customer ? 5 : 0);
-      const risk = extracted.conditionality === 'HIGH' ? -15 : (extracted.conditionality === 'MEDIUM' ? -8 : 0);
-      
-      impact_score = base + relSize + stageBonus + boosters + risk;
-      if (family === 'ORDER_PIPELINE' && !extracted.order_value_cr) {
-        impact_score = Math.min(impact_score, 55);
+      addFactor(family === 'ORDER_CONTRACT' ? 20 : 15, `Base weight for ${family.replace('_', ' ')}`);
+      if (extracted.order_value_cr) {
+        const val = extracted.order_value_cr;
+        const absoluteBonus = val >= 1000 ? 30 : val >= 500 ? 20 : val >= 100 ? 10 : 5;
+        addFactor(absoluteBonus, `Value bonus (₹${val} Cr)`);
+      } else {
+        addFactor(-10, "Order value missing");
       }
+      const stageBonus = extracted.stage === 'LOA' ? 20 : extracted.stage === 'WO' ? 18 : extracted.stage === 'NTP' ? 15 : extracted.stage === 'L1' ? 12 : 5;
+      addFactor(stageBonus, `Stage: ${extracted.stage || 'General'}`);
       break;
     }
     case 'CREDIT_RATING': {
-      const actionNotch = extracted.rating_action === 'DOWNGRADE' 
-        ? clamp(55 + 10 * (extracted.notches || 1), 0, 80)
-        : (extracted.rating_action === 'UPGRADE' ? clamp(35 + 8 * (extracted.notches || 1), 0, 70) : 25);
-      const outlook = (extracted.outlook_change === 'NEGATIVE' ? 10 : (extracted.outlook_change === 'POSITIVE' ? 6 : 0)) +
-                      (extracted.watch === 'NEGATIVE' ? 15 : (extracted.watch === 'POSITIVE' ? 10 : 0));
-      impact_score = actionNotch + outlook;
-      direction = (extracted.rating_action === 'DOWNGRADE' || extracted.outlook_change === 'NEGATIVE' || extracted.watch === 'NEGATIVE') 
-        ? 'NEGATIVE' : (extracted.rating_action === 'UPGRADE' || extracted.outlook_change === 'POSITIVE' || extracted.watch === 'POSITIVE' ? 'POSITIVE' : 'NEUTRAL');
+      const sub = lower(extracted.rating_action || "");
+      const isUpgrade = sub.includes('upgrade');
+      const isDowngrade = sub.includes('downgrade');
+      direction = isUpgrade ? 'POSITIVE' : (isDowngrade ? 'NEGATIVE' : 'NEUTRAL');
+      addFactor(isUpgrade ? 40 : (isDowngrade ? 50 : 10), `Rating: ${extracted.rating_action || 'Review'}`);
       break;
     }
-    case 'DILUTION_CAPITAL': {
+    case 'LITIGATION_REGULATORY':
       direction = 'NEGATIVE';
-      const base = 15;
-      const magnitude = extracted.dilution_pct ? clamp(extracted.dilution_pct * 4, 0, 60) : (extracted.issue_value_cr && mCapCr ? clamp((extracted.issue_value_cr / mCapCr) * 100 * 2, 0, 60) : 20);
-      const quality = extracted.use_of_funds?.includes('DEBT') ? 10 : (extracted.use_of_funds?.includes('GROWTH') ? 6 : (extracted.use_of_funds?.includes('GENERAL') ? -10 : 0));
-      const pricing = (extracted.discount_pct || 0) >= 10 ? -15 : ((extracted.discount_pct || 0) >= 7 ? -8 : 0);
-      impact_score = base + magnitude + quality + pricing;
+      addFactor(40, "Litigation risk");
       break;
-    }
-    case 'SHAREHOLDER_RETURNS': {
-      direction = 'POSITIVE';
-      const base = 10;
-      const buyback = (extracted.action_type === 'BUYBACK' && extracted.buyback_value_cr && mCapCr) ? clamp((extracted.buyback_value_cr / mCapCr) * 100 * 2 + ((extracted.buyback_premium_pct || 0) >= 10 ? 5 : 0), 0, 70) : 0;
-      const div = (extracted.action_type === 'DIVIDEND' && extracted.dividend_yield_pct) ? clamp(extracted.dividend_yield_pct * 10 - (extracted.one_off ? 10 : 0), 0, 35) : 0;
-      const bonus = (extracted.action_type === 'BONUS' || extracted.action_type === 'SPLIT') ? 20 : 0;
-      impact_score = base + buyback + div + bonus;
-      break;
-    }
-    case 'GOVERNANCE_MANAGEMENT': {
-      direction = 'NEGATIVE';
-      const severity = extracted.event_subtype === 'AUDITOR_RESIGN' ? 75 : (extracted.event_subtype === 'AUDIT_QUALIFICATION' ? 85 : (extracted.event_subtype === 'CFO_RESIGN' ? 60 : (extracted.event_subtype === 'CEO_RESIGN' ? 55 : 30)));
-      const mods = (extracted.reason_quality === 'VAGUE' ? 10 : 0) + (extracted.effective_immediate ? 10 : 0) + (extracted.successor_named ? -10 : 0) + (extracted.forensic_audit ? 15 : 0);
-      impact_score = severity + mods;
-      break;
-    }
-    case 'LITIGATION_REGULATORY': {
-      direction = 'NEGATIVE';
-      const base = 20;
-      const severity = extracted.stage_legal === 'ARREST_ATTACHMENT' ? 25 : (extracted.stage_legal === 'ORDER' ? 15 : (extracted.stage_legal === 'NOTICE' ? 5 : 10));
-      const ops = extracted.ops_impact === 'YES' ? 20 : 0;
-      impact_score = base + severity + ops;
-      break;
-    }
+    default:
+      addFactor(10, `Standard event: ${family}`);
   }
 
-  impact_score = clamp(impact_score, 0, 100);
+  impact_score = Math.min(Math.max(impact_score, 0), 100);
+  let recommendation: ActionRecommendation = 'TRACK';
+  if (confidence < 0.65) recommendation = 'NEEDS_MANUAL_REVIEW';
+  else if (impact_score >= 75) recommendation = direction === 'POSITIVE' ? 'ACTIONABLE_BULLISH' : 'ACTIONABLE_BEARISH_RISK';
+  else if (impact_score >= 55) recommendation = 'HIGH_PRIORITY_WATCH';
 
-  let recommendation: ActionRecommendation = 'IGNORE';
-  if (confidence < 0.65 || (family === 'ORDER_PIPELINE' && !mCapCr)) {
-    recommendation = 'NEEDS_MANUAL_REVIEW';
-  } else if (impact_score >= 80 && direction === 'POSITIVE') {
-    recommendation = 'ACTIONABLE_BULLISH';
-  } else if (impact_score >= 80 && direction === 'NEGATIVE') {
-    recommendation = 'ACTIONABLE_BEARISH_RISK';
-  } else if (impact_score >= 60) {
-    recommendation = 'HIGH_PRIORITY_WATCH';
-  } else if (impact_score >= 40) {
-    recommendation = 'TRACK';
-  }
-
-  return { impact_score, direction, recommendation };
+  return { impact_score, direction, recommendation, factors };
 };
 
-/**
- * PARSING LOGIC
- */
-export const parseNseCsv = (text: string, source: Reg30Source): EventCandidate[] => {
-  const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
-  if (lines.length < 2) return [];
+const getDeterministicAnalysis = (report: Partial<Reg30Report>) => {
+  const ext = report.extracted_data || {};
+  const stage = ext.stage;
+  const cond = ext.conditionality;
+  const months = ext.execution_months || (ext.execution_years ? ext.execution_years * 12 : null);
+  const customer = lower(ext.customer || "");
+  const impact = report.impact_score || 0;
+
+  let risk: 'LOW' | 'MED' | 'HIGH' = 'LOW';
+  if (stage === 'L1' || cond === 'HIGH') risk = 'HIGH';
+  else if (months > 36 || stage === 'OTHER') risk = 'MED';
+  else if (['LOA', 'WO', 'NTP'].includes(stage || "") && cond !== 'HIGH') risk = 'LOW';
+
+  const isGovtSecure = /cpwd|nhai|metro|railways|govt|ministry/.test(customer);
+  if (isGovtSecure) {
+    if (risk === 'HIGH') risk = 'MED';
+    else if (risk === 'MED') risk = 'LOW';
+  }
+
+  let pBias: 'TAILWIND' | 'HEADWIND' | 'NEUTRAL' = 'NEUTRAL';
+  let pEvent: string | null = null;
+  const evDate = new Date(report.event_date || "");
+  const month = evDate.getMonth();
+  const day = evDate.getDate();
+  const isBudgetWindow = (month === 0 && day >= 15) || (month === 1 && day <= 15);
+  const summary = lower(report.summary || "");
+  const isInfraSector = /infra|epc|construction|building|road|bridge|power|hydro|railway|water/.test(summary);
   
-  const headers = lines[0].split(',').map(normalizeHeader);
-  const candidates: EventCandidate[] = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    const values = lines[i].split(',').map(v => s(v).replace(/^"+|"+$/g, ""));
-    if (values.length < headers.length) continue;
-
-    const row: any = {};
-    headers.forEach((h, idx) => row[h] = values[idx]);
-
-    let symbol = s(row['SYMBOL'] || row['Symbol'] || null);
-    let company_name = s(row['COMPANY NAME'] || row['Company Name'] || row['Issuer'] || 'Unknown');
-    let raw_text = '';
-    let category = '';
-    let family: Reg30EventFamily | undefined;
-    
-    let dateStr = s(row['DATE'] || row['Date'] || row['EX-DATE'] || row['RECORD DATE'] || '');
-    if (!dateStr || dateStr === "-") dateStr = new Date().toISOString().split('T')[0];
-    
-    if (source === 'XBRL') {
-      category = s(row['EVENT/SUBJECT']);
-      raw_text = `${category} | ${s(row['ATTACHMENT'])}`;
-      
-      const sub = lower(category);
-      if (sub.includes('award') || sub.includes('bagging') || sub.includes('contract')) family = 'ORDER_CONTRACT';
-      else if (sub.includes('issuance') || sub.includes('allotment') || sub.includes('capital')) family = 'DILUTION_CAPITAL';
-      else if (sub.includes('dividend') || sub.includes('buyback') || sub.includes('bonus')) family = 'SHAREHOLDER_RETURNS';
-      else if (sub.includes('director') || sub.includes('auditor') || sub.includes('kmp')) family = 'GOVERNANCE_MANAGEMENT';
-      else if (sub.includes('fraud') || sub.includes('default') || sub.includes('litigation')) family = 'LITIGATION_REGULATORY';
-    } else if (source === 'CorporateActions') {
-      category = s(row['PURPOSE']);
-      raw_text = category;
-      family = 'SHAREHOLDER_RETURNS';
-    } else if (source === 'CreditRating') {
-      category = s(row['RATING ACTION']);
-      raw_text = [
-        s(row["COMPANY NAME"]),
-        s(row["NAME OF CREDIT RATING AGENCY"]),
-        `Rating: ${s(row["CREDIT RATING"])}`,
-        `Outlook: ${s(row["OUTLOOK"])}`,
-        `Action: ${s(row["RATING ACTION"])}`,
-        `Date: ${s(row["DATE"])}`
-      ].filter(Boolean).join(" | ");
-      family = 'CREDIT_RATING';
-    }
-
-    if (family) {
-      candidates.push({
-        id: Math.random().toString(36).substr(2, 9),
-        source,
-        event_date: dateStr,
-        event_date_time: dateStr,
-        symbol: symbol || null,
-        company_name,
-        category,
-        raw_text,
-        event_family: family,
-        link: s(row['ATTACHMENT'] || row['Link'] || row['XBRL FILE NAME'])
-      });
-    }
+  if (isInfraSector && isBudgetWindow) {
+    pBias = 'TAILWIND';
+    pEvent = "Union Budget capex focus";
   }
 
-  return candidates;
+  let tPlan: 'BUY_DIP' | 'WAIT_CONFIRMATION' | 'MOMENTUM_OK' | 'AVOID_CHASE' = 'MOMENTUM_OK';
+  if (stage === 'L1') tPlan = 'WAIT_CONFIRMATION';
+  else if (risk === 'HIGH') tPlan = 'AVOID_CHASE';
+  else if (impact >= 75) tPlan = 'BUY_DIP';
+  else tPlan = 'MOMENTUM_OK';
+
+  const triggers = {
+    BUY_DIP: "Prefer pullback entry; watch VWAP reclaim / retest of D0 low.",
+    WAIT_CONFIRMATION: "Wait for LOA/WO/NTP confirmation before entry.",
+    AVOID_CHASE: "High shakeout risk; avoid chasing gaps; wait 1–3 sessions.",
+    MOMENTUM_OK: "OK to watch breakout confirmation; avoid thin volume."
+  };
+
+  return {
+    institutional_risk: risk,
+    policy_bias: pBias,
+    policy_event: pEvent,
+    tactical_plan: tPlan,
+    trigger_text: triggers[tPlan],
+    execution_realism: months ? (months <= 12 ? "fast-cycle" : months <= 24 ? "normal-cycle" : months <= 36 ? "slow-cycle" : "very long-cycle") : "duration unknown"
+  };
 };
 
-/**
- * LIVE SEARCH LOGIC
- */
-export const searchOrderPipeline = async (symbols: string[]): Promise<EventCandidate[]> => {
-  const mockFeed = [
-    { title: "Larsen & Toubro emerges as L1 bidder for high-speed rail", description: "L&T has emerged as the lowest bidder for a massive infrastructure project worth over 5000 Cr.", link: "https://news.example.com/lt-l1", date: new Date().toISOString() },
-    { title: "BHEL receives Work Order from NTPC", description: "BHEL has been awarded a contract for boiler installation.", link: "https://news.example.com/bhel-wo", date: new Date().toISOString() }
-  ];
-
-  const candidates: EventCandidate[] = [];
-  const stages = [
-    { key: 'LOA', patterns: ["loa", "letter of award", "letter of acceptance"] },
-    { key: 'NTP', patterns: ["notice to proceed", "ntp"] },
-    { key: 'L1', patterns: ["l1 bidder", "lowest bidder", "emerged as l1"] },
-    { key: 'WO', patterns: ["work order", "wo received", "purchase order"] }
-  ];
-
-  for (const item of mockFeed) {
-    const text = lower(item.title + " " + item.description);
-    for (const stage of stages) {
-      if (stage.patterns.some(p => text.includes(p))) {
-        candidates.push({
-          id: Math.random().toString(36).substr(2, 9),
-          source: 'RSSNews',
-          event_date: item.date.split('T')[0],
-          event_date_time: item.date,
-          symbol: null, 
-          company_name: item.title.split(' ')[0], 
-          category: `Detected ${stage.key}`,
-          raw_text: `${item.title} | ${item.description}`,
-          stage_hint: stage.key,
-          event_family: 'ORDER_PIPELINE',
-          link: item.link
-        });
-        break;
-      }
-    }
-  }
-
-  return candidates;
-};
-
-/**
- * PERSISTENCE LOGIC
- */
-export const fetchAnalyzedEvents = async (limit = 500): Promise<Reg30Report[]> => {
+export const fetchAnalyzedEvents = async (limit = 1000): Promise<Reg30Report[]> => {
   const { data, error } = await supabase
     .from('analyzed_events')
     .select('*')
     .order('event_date', { ascending: false })
-    .order('impact_score', { ascending: false })
     .limit(limit);
-
-  if (error) {
-    console.error("Fetch Analysis Failed:", error);
-    return [];
-  }
-
+  if (error) return [];
   return data.map(item => ({
     id: item.id,
     event_date: item.event_date,
@@ -281,154 +192,291 @@ export const fetchAnalyzedEvents = async (limit = 500): Promise<Reg30Report[]> =
     confidence: item.confidence,
     recommendation: item.action_recommendation as ActionRecommendation,
     link: item.source_link,
+    attachment_link: item.attachment_link,
+    attachment_text: item.attachment_text,
     extracted_data: item.extracted_json,
-    evidence_spans: item.evidence_spans || []
+    evidence_spans: item.evidence_spans || [],
+    missing_fields: item.missing_fields || [],
+    scoring_factors: item.scoring_factors || [],
+    raw_text: item.summary,
+    order_value_cr: item.extracted_json?.order_value_cr,
+    event_analysis_text: item.event_analysis_text,
+    institutional_risk: item.institutional_risk,
+    policy_bias: item.policy_bias,
+    policy_event: item.policy_event,
+    tactical_plan: item.tactical_plan,
+    trigger_text: item.trigger_text
   }));
+};
+
+export const runReg30Analysis = async (
+  candidates: EventCandidate[], 
+  onRowProgress: (id: string, step: 'FETCHING' | 'AI_ANALYZING' | 'SAVING' | 'COMPLETED' | 'FAILED') => void
+): Promise<Reg30Report[]> => {
+  const reports: Reg30Report[] = [];
+  
+  for (const c of candidates) {
+    try {
+      onRowProgress(c.id, 'FETCHING');
+      const cacheKey = getStringHash(`${c.event_family}|${c.company_name}|${c.attachment_link || c.id}`);
+      const { data: cached } = await supabase.from('gemini_cache').select('response_json').eq('cache_key', cacheKey).maybeSingle();
+      
+      let aiResult = cached?.response_json;
+      let attachment_text = "";
+      
+      if (!aiResult) {
+        attachment_text = await fetchAttachmentText(c.attachment_link || "");
+        onRowProgress(c.id, 'AI_ANALYZING');
+        aiResult = await analyzeReg30Event({ ...c, attachment_text });
+        if (aiResult) await supabase.from('gemini_cache').upsert({ cache_key: cacheKey, response_json: aiResult });
+      }
+
+      if (aiResult) {
+        onRowProgress(c.id, 'SAVING');
+        const scoring = calculateScoreAndRecommendation(c.event_family!, aiResult.extracted, aiResult.confidence, null);
+        
+        let analysisPayload: any = {};
+        if (scoring.impact_score >= 50) {
+          const det = getDeterministicAnalysis({
+            event_date: c.event_date,
+            summary: aiResult.summary,
+            impact_score: scoring.impact_score,
+            extracted_data: aiResult.extracted
+          });
+          
+          const narrativeCacheKey = getStringHash(`narrative_formatted_v2|${c.symbol}|${c.event_date}|${det.tactical_plan}`);
+          const { data: narrativeCached } = await supabase.from('gemini_cache').select('response_json').eq('cache_key', narrativeCacheKey).maybeSingle();
+          
+          let narrativeData = narrativeCached?.response_json;
+          if (!narrativeData) {
+            narrativeData = await analyzeEventNarrative({
+              symbol: c.symbol,
+              event_family: c.event_family,
+              stage: aiResult.extracted.stage,
+              order_value_cr: aiResult.extracted.order_value_cr,
+              customer: aiResult.extracted.customer,
+              ...det
+            });
+            if (narrativeData) await supabase.from('gemini_cache').upsert({ cache_key: narrativeCacheKey, response_json: narrativeData });
+          }
+          
+          analysisPayload = {
+            ...det,
+            event_analysis_text: narrativeData?.event_analysis_text || "Tactical overview generated successfully.",
+            analysis_updated_at: new Date().toISOString()
+          };
+        }
+
+        const fingerprint = getStringHash(`${c.symbol}|${c.company_name}|${c.event_date}|${aiResult.summary.substring(0, 30)}|${c.id}`);
+        
+        const payload = {
+          event_date: c.event_date,
+          symbol: c.symbol,
+          company_name: c.company_name,
+          source: c.source,
+          event_family: c.event_family,
+          summary: aiResult.summary,
+          impact_score: scoring.impact_score,
+          action_recommendation: scoring.recommendation,
+          extracted_json: aiResult.extracted,
+          attachment_link: c.attachment_link,
+          attachment_text: attachment_text || "Content from Cache",
+          event_fingerprint: fingerprint,
+          confidence: aiResult.confidence,
+          direction: scoring.direction,
+          source_link: c.link,
+          stage: aiResult.extracted.stage,
+          evidence_spans: aiResult.evidence_spans,
+          missing_fields: aiResult.missing_fields,
+          scoring_factors: scoring.factors,
+          ...analysisPayload
+        };
+
+        const { data: report, error: upsertError } = await supabase.from('analyzed_events').upsert(payload, { onConflict: 'event_fingerprint' }).select().single();
+        if (upsertError) {
+          onRowProgress(c.id, 'FAILED');
+        } else {
+          if (report) reports.push(report as any);
+          onRowProgress(c.id, 'COMPLETED');
+        }
+      } else {
+        onRowProgress(c.id, 'FAILED');
+      }
+    } catch (err) {
+      onRowProgress(c.id, 'FAILED');
+    }
+  }
+  return reports;
 };
 
 export const clearReg30History = async () => {
   await supabase.from('analyzed_events').delete().gte('event_date', '1900-01-01');
-  await supabase.from('event_candidates').delete().gte('event_date', '1900-01-01');
-  await supabase.from('ingestion_runs').delete().gte('started_at', '1900-01-01');
+};
+
+const normalizeLink = (raw: string, source: Reg30Source): string => {
+  const link = s(raw);
+  if (!link || link === "null") return "";
+  if (link.startsWith('http')) return link;
+  if (link.endsWith('.xml') || source === 'XBRL' || source === 'CreditRating') {
+    return `https://nsearchives.nseindia.com/corporate/xbrl/${link}`;
+  }
+  return `https://nsearchives.nseindia.com/corporate/ixbrl/${link}`;
+};
+
+const normalizeDate = (raw: string): string => {
+  const clean = s(raw).split(' ')[0].toUpperCase();
+  if (!clean) return new Date().toISOString().split('T')[0];
+  if (clean.includes('-') && isNaN(Number(clean.charAt(0)))) {
+    const months: any = { JAN:'01', FEB:'02', MAR:'03', APR:'04', MAY:'05', JUN:'06', JUL:'07', AUG:'08', SEP:'09', OCT:'10', NOV:'11', DEC:'12' };
+    const parts = clean.split('-');
+    if (parts.length === 3) return `${parts[2]}-${months[parts[1]] || '01'}-${parts[0].padStart(2, '0')}`;
+  }
+  const separator = clean.includes('-') ? '-' : (clean.includes('/') ? '/' : null);
+  if (separator) {
+    const p = clean.split(separator);
+    if (p.length === 3) {
+      if (p[2].length === 4) return `${p[2]}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}`;
+      if (p[0].length === 4) return `${p[0]}-${p[1].padStart(2, '0')}-${p[2].padStart(2, '0')}`;
+    }
+  }
+  return clean; 
+};
+
+const findColumn = (headers: string[], keys: string[]) => {
+  const norm = (str: string) => str.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const searchKeys = keys.map(norm);
+  return headers.findIndex(h => searchKeys.some(sk => norm(h).includes(sk)));
+};
+
+const splitCsvLine = (line: string): string[] => {
+  const result: string[] = [];
+  let currentField = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') inQuotes = !inQuotes;
+    else if (char === ',' && !inQuotes) {
+      result.push(currentField.trim().replace(/^"+|"+$/g, ''));
+      currentField = '';
+    } else currentField += char;
+  }
+  result.push(currentField.trim().replace(/^"+|"+$/g, ''));
+  return result;
+};
+
+export const parseNseCsv = (text: string, source: Reg30Source): EventCandidate[] => {
+  const cleanText = text.replace(/^\uFEFF/, '').replace(/\r/g, '');
+  const lines = cleanText.split('\n').filter(l => l.trim().length > 0);
+  if (lines.length < 2) return [];
+  const headers = splitCsvLine(lines[0]);
+  const idxSymbol = findColumn(headers, ['symbol', 'sym']);
+  const idxCompany = findColumn(headers, ['companyname', 'issuer', 'name']);
+  const idxSubject = findColumn(headers, ['subject', 'purpose', 'eventsubject', 'category', 'subject']);
+  const idxDetails = findColumn(headers, ['details', 'description', 'brief', 'narration', 'descriptionofevent', 'typeofsubmission']);
+  const idxDate = findColumn(headers, ['date', 'timestamp', 'createdatetime', 'reportingdate', 'exdate', 'broadcastdate']);
+  const idxAttachment = findColumn(headers, ['attachment', 'link', 'document', 'xbrlfilename', 'attachmentlink', 'attachment']);
+  const idxRatingAction = findColumn(headers, ['ratingaction']);
+  const candidates: EventCandidate[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const values = splitCsvLine(lines[i]);
+    if (values.length < 2) continue;
+    const company_name = idxCompany !== -1 ? values[idxCompany] : "Unknown";
+    const category = idxSubject !== -1 ? values[idxSubject] : "";
+    const details = idxDetails !== -1 ? values[idxDetails] : "";
+    const attachment_link = normalizeLink(idxAttachment !== -1 ? values[idxAttachment] : "", source);
+    const event_date = normalizeDate(idxDate !== -1 ? values[idxDate] : "");
+    const symbol = idxSymbol !== -1 ? values[idxSymbol] : null;
+    let family: Reg30EventFamily = 'GOVERNANCE_MANAGEMENT';
+    const sub = lower(category + " " + details + " " + (idxRatingAction !== -1 ? values[idxRatingAction] : ""));
+    const isServiceContract = /investor relations|ir agency|public relations|pr agency|adfactors|communication agency|branding|media relations|media company|advertising|marketing|social media/i.test(sub);
+    const looksLikeOrderWin = /awarding|bagging|work order|letter of award|\bloa\b|l1 bidder|lowest bidder|notice to proceed|\bntp\b|purchase order|\bpo\b/i.test(sub);
+    if (looksLikeOrderWin && !isServiceContract) family = 'ORDER_CONTRACT';
+    else if (sub.includes('issuance') || sub.includes('allotment') || sub.includes('equity') || sub.includes('rights issue')) family = 'DILUTION_CAPITAL';
+    else if (sub.includes('dividend') || sub.includes('buyback') || sub.includes('bonus') || sub.includes('stock split')) family = 'SHAREHOLDER_RETURNS';
+    else if (sub.includes('rating') || source === 'CreditRating') family = 'CREDIT_RATING';
+    else if (sub.includes('litigation') || sub.includes('fine') || sub.includes('court') || sub.includes('penalty')) family = 'LITIGATION_REGULATORY';
+    candidates.push({
+      id: getStringHash(`${company_name}-${event_date}-${i}-${source}`),
+      source, event_date, event_date_time: event_date, symbol, company_name, category,
+      raw_text: `${category} | Details: ${details} | Company: ${company_name}`,
+      attachment_link, event_family: family, link: attachment_link
+    });
+  }
+  return candidates;
+};
+
+export const reAnalyzeSingleEvent = async (report: Reg30Report): Promise<Reg30Report | null> => {
+  const attachment_text = await fetchAttachmentText(report.attachment_link || "");
+  const candidate: EventCandidate = {
+    id: report.id, source: report.source, event_date: report.event_date, event_date_time: report.event_date,
+    symbol: report.symbol, company_name: report.company_name, category: report.event_family,
+    raw_text: report.summary, attachment_text: attachment_text, link: report.link,
+    attachment_link: report.attachment_link, event_family: report.event_family
+  };
+  const aiResult = await analyzeReg30Event(candidate);
+  if (aiResult) {
+    const scoring = calculateScoreAndRecommendation(report.event_family, aiResult.extracted, aiResult.confidence, null);
+    
+    let analysisPayload: any = {};
+    if (scoring.impact_score >= 50) {
+      const det = getDeterministicAnalysis({
+        event_date: report.event_date,
+        summary: aiResult.summary,
+        impact_score: scoring.impact_score,
+        extracted_data: aiResult.extracted
+      });
+      const narrativeData = await analyzeEventNarrative({
+        symbol: report.symbol,
+        event_family: report.event_family,
+        stage: aiResult.extracted.stage,
+        order_value_cr: aiResult.extracted.order_value_cr,
+        customer: aiResult.extracted.customer,
+        ...det
+      });
+      analysisPayload = { 
+        ...det, 
+        event_analysis_text: narrativeData?.event_analysis_text || "Analysis updated.",
+        analysis_updated_at: new Date().toISOString()
+      };
+    }
+
+    const { data: updated } = await supabase.from('analyzed_events').update({
+      summary: aiResult.summary, impact_score: scoring.impact_score, action_recommendation: scoring.recommendation,
+      extracted_json: aiResult.extracted, attachment_text: attachment_text, confidence: aiResult.confidence,
+      direction: scoring.direction, stage: aiResult.extracted.stage, evidence_spans: aiResult.evidence_spans,
+      missing_fields: aiResult.missing_fields, scoring_factors: scoring.factors, ...analysisPayload
+    }).eq('id', report.id).select().single();
+    return updated as any;
+  }
+  return null;
 };
 
 /**
- * FINAL BATCH RUNNER WITH PERSISTENCE
+ * Specifically regenerates the narrative only (to save costs on re-extracting everything)
  */
-export const runReg30Analysis = async (
-  candidates: EventCandidate[], 
-  onProgress: (msg: string) => void,
-  runType: 'CSV' | 'LIVE_SEARCH' = 'CSV',
-  maxCalls = 50
-): Promise<Reg30Report[]> => {
-  // 1. Create Ingestion Run
-  const { data: run, error: runError } = await supabase
-    .from('ingestion_runs')
-    .insert({ run_type: runType, status: 'RUNNING' })
-    .select()
-    .single();
+export const regenerateNarrativeOnly = async (report: Reg30Report): Promise<Reg30Report | null> => {
+  if (report.impact_score < 50) return null;
+  
+  const det = getDeterministicAnalysis(report);
+  const narrativeData = await analyzeEventNarrative({
+    symbol: report.symbol,
+    event_family: report.event_family,
+    stage: report.stage,
+    order_value_cr: report.order_value_cr,
+    customer: report.extracted_data?.customer,
+    ...det
+  });
 
-  if (runError) throw runError;
-
-  onProgress("Deduplicating candidates...");
-  const seen = new Set();
-  const unique = candidates.filter(c => {
-    const key = `${c.symbol || c.company_name}-${c.event_family}-${c.raw_text.substring(0, 30)}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).slice(0, maxCalls);
-
-  // 2. Save Candidates (Batch Insert)
-  if (unique.length > 0) {
-    await supabase.from('event_candidates').insert(
-      unique.map(c => ({
-        ingestion_run_id: run.id,
-        source: c.source,
-        event_date: c.event_date,
-        event_datetime: c.event_date_time,
-        symbol: c.symbol,
-        company_name: c.company_name,
-        event_family: c.event_family,
-        stage_hint: c.stage_hint,
-        category: c.category,
-        raw_text: c.raw_text,
-        link: c.link,
-        dedupe_key: `${c.symbol || c.company_name}-${c.event_family}-${c.event_date}`
-      }))
-    );
+  if (narrativeData) {
+    const { data: updated } = await supabase.from('analyzed_events').update({
+      event_analysis_text: narrativeData.event_analysis_text,
+      institutional_risk: det.institutional_risk,
+      policy_bias: det.policy_bias,
+      tactical_plan: det.tactical_plan,
+      trigger_text: det.trigger_text,
+      analysis_updated_at: new Date().toISOString()
+    }).eq('id', report.id).select().single();
+    return updated as any;
   }
-
-  const reports: Reg30Report[] = [];
-  let done = 0;
-
-  for (const c of unique) {
-    onProgress(`Analyzing ${++done}/${unique.length}: ${c.company_name}...`);
-    
-    // Gemini Caching Logic
-    const cacheKey = getStringHash(`${c.event_family}-${c.stage_hint || ''}-${c.raw_text}`);
-    const { data: cachedResponse } = await supabase
-      .from('gemini_cache')
-      .select('response_json')
-      .eq('cache_key', cacheKey)
-      .maybeSingle();
-
-    let aiResult;
-    if (cachedResponse) {
-      aiResult = cachedResponse.response_json;
-    } else {
-      aiResult = await analyzeReg30Event(c);
-      if (aiResult) {
-        // Save to cache for future re-runs
-        await supabase.from('gemini_cache').upsert({ cache_key: cacheKey, response_json: aiResult });
-      }
-    }
-
-    if (aiResult) {
-      const mockMCap = 10000; // Simplified M-Cap assumption for scoring
-      const scoring = calculateScoreAndRecommendation(
-        c.event_family!, 
-        aiResult.extracted, 
-        aiResult.confidence, 
-        mockMCap
-      );
-
-      const report: Reg30Report = {
-        id: Math.random().toString(36).substr(2, 9),
-        event_date: c.event_date,
-        symbol: c.symbol,
-        company_name: c.company_name,
-        source: c.source,
-        event_family: c.event_family!,
-        stage: aiResult.extracted.stage,
-        summary: aiResult.summary,
-        impact_score: scoring.impact_score,
-        direction: scoring.direction,
-        confidence: aiResult.confidence,
-        recommendation: scoring.recommendation,
-        link: c.link,
-        extracted_data: aiResult.extracted,
-        evidence_spans: aiResult.evidence_spans
-      };
-
-      // 3. PERSISTENCE: Create Stable Fingerprint for Upsert
-      // lower(symbol or company_name) + '|' + event_family + '|' + (stage or '') + '|' + event_date + '|' + hash(normalized_summary)
-      const fingerprint = lower(`${c.symbol || c.company_name}|${c.event_family}|${aiResult.extracted.stage || ''}|${c.event_date}|${getStringHash(aiResult.summary)}`);
-      
-      const { error: upsertErr } = await supabase.from('analyzed_events').upsert({
-        ingestion_run_id: run.id,
-        event_date: c.event_date,
-        event_datetime: c.event_date_time,
-        symbol: c.symbol,
-        company_name: c.company_name,
-        source: c.source,
-        event_family: c.event_family,
-        stage: aiResult.extracted.stage,
-        summary: aiResult.summary,
-        direction: scoring.direction,
-        confidence: aiResult.confidence,
-        impact_score: scoring.impact_score,
-        action_recommendation: scoring.recommendation,
-        extracted_json: aiResult.extracted,
-        evidence_spans: aiResult.evidence_spans,
-        source_link: c.link,
-        event_fingerprint: fingerprint,
-        market_cap_cr: mockMCap
-      }, { onConflict: 'event_fingerprint' });
-
-      if (upsertErr) {
-        console.error("Persist Analysis Error:", upsertErr);
-      }
-
-      reports.push(report);
-    }
-  }
-
-  // 4. Mark Run Completion
-  await supabase.from('ingestion_runs').update({ 
-    status: 'SUCCESS', 
-    completed_at: new Date().toISOString() 
-  }).eq('id', run.id);
-
-  return reports;
+  return null;
 };

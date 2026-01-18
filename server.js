@@ -1,3 +1,4 @@
+
 import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
@@ -68,74 +69,117 @@ const breezeRequest = async (path, payload = {}) => {
   return JSON.parse(text);
 };
 
-// --- API ENDPOINTS ---
+// --- ATTACHMENT PARSER ---
+// This endpoint conversion HTML/iXBRL to clean text.
+// GET version for easy debugging in a browser tab
+app.get('/api/attachment/parse', async (req, res) => {
+  const url = req.query.url;
+  if (!url) return res.send("Please provide a ?url= parameter");
+  
+  try {
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    });
+    const html = await response.text();
+    const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    res.send(text);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
 
+// POST version used by the frontend
+app.post('/api/attachment/parse', async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: "URL is required" });
+
+  try {
+    console.log(`[Proxy] Fetching NSE Document: ${url}`);
+    
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+        'Referer': 'https://www.nseindia.com/'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`NSE Archives responded with ${response.status}`);
+    }
+
+    const html = await response.text();
+    
+    // Cleanup HTML to get searchable text
+    const text = html
+      .replace(/<script\b[^>]*>([\s\S]*?)<\/script>/gim, "")
+      .replace(/<style\b[^>]*>([\s\S]*?)<\/style>/gim, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    console.log(`[Proxy] Extraction complete. Chars: ${text.length}`);
+    res.json({ text });
+  } catch (err) {
+    console.error(`[Proxy] Parser Failure:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- BREEZE ENDPOINTS ---
 app.get('/api/breeze/health', (req, res) => {
-  res.status(200).json({ 
+  res.json({ 
     ok: true, 
-    keys_configured: !!(BREEZE_APP_KEY && BREEZE_SECRET_KEY),
     session_token_set: !!BREEZE_SESSION_TOKEN,
-    server_time: new Date().toISOString()
+    proxy_key_required: !!PROXY_API_KEY 
   });
 });
 
-// Admin endpoint to set the daily session token
 app.post('/api/breeze/admin/api-session', (req, res) => {
-  const adminKey = req.header("X-Proxy-Key");
-  if (PROXY_API_KEY && adminKey !== PROXY_API_KEY) {
-    return res.status(401).json({ ok: false, message: "Invalid Admin Key" });
-  }
-  
   const { api_session } = req.body;
-  if (!api_session) return res.status(400).json({ ok: false, message: "Missing api_session" });
+  const key = req.headers['x-proxy-key'];
+
+  if (PROXY_API_KEY && key !== PROXY_API_KEY) {
+    return res.status(401).json({ message: "Invalid Proxy Key" });
+  }
+
+  if (!api_session) return res.status(400).json({ message: "Session required" });
   
   BREEZE_SESSION_TOKEN = api_session;
-  res.json({ ok: true, message: "Daily session token updated successfully." });
+  res.json({ message: "Breeze session token updated successfully" });
 });
 
 app.post('/api/breeze/quotes', async (req, res) => {
   try {
-    const payload = req.body;
-    const data = await breezeRequest('/quotes', {
-      stock_code: payload.stock_code || "NIFTY",
-      exchange_code: payload.exchange_code || "NSE",
-      product_type: payload.product_type || "cash",
-      ...payload 
-    });
+    const data = await breezeRequest('/customerdetails/quotes', req.body);
     res.json(data);
-  } catch (e) {
-    res.status(500).json({ ok: false, message: e.message || "Proxy error" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 });
 
 app.post('/api/breeze/historical', async (req, res) => {
   try {
-    const payload = req.body;
-    if (!payload.date) return res.status(400).json({ ok: false, message: "Missing date" });
-
-    const from_to = `${payload.date}T07:00:00.000Z`;
-
-    const data = await breezeRequest('/historicalcharts', {
-      interval: payload.interval || "1day",
-      from_date: from_to,
-      to_date: from_to,
-      stock_code: payload.stock_code || "NIFTY",
-      exchange_code: payload.exchange_code || "NSE",
-      product_type: payload.product_type || "cash"
-    });
-
+    const { date, stock_code, exchange_code, product_type } = req.body;
+    const payload = {
+      interval: '1day',
+      from_date: `${date}T09:00:00.000Z`,
+      to_date: `${date}T16:00:00.000Z`,
+      stock_code,
+      exchange_code,
+      product_type
+    };
+    const data = await breezeRequest('/historicalcharts', payload);
     res.json(data);
-  } catch (e) {
-    res.status(500).json({ ok: false, message: e.message || "Proxy error" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 });
 
-app.use(express.static(__dirname));
-
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
-});
-
-app.listen(port, '0.0.0.0', () => {
-  console.log(`IQ Server Active on port ${port}`);
+app.listen(port, () => {
+  console.log(`Market Analysis Proxy active on port ${port}`);
 });

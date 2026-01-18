@@ -1,4 +1,5 @@
 
+
 export type Sentiment = 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL';
 export type MacroCategory = 'Geopolitical' | 'Monetary Policy' | 'Inflation' | 'Earnings' | 'Commodities' | 'Currency' | 'Global Markets' | 'Domestic Policy' | 'Risk-off' | 'Technical' | 'Other';
 
@@ -90,7 +91,9 @@ export interface EventCandidate {
   company_name: string;
   category: string;
   raw_text: string;
+  attachment_text?: string;
   link?: string;
+  attachment_link?: string;
   stage_hint?: string;
   event_family?: Reg30EventFamily;
 }
@@ -109,6 +112,20 @@ export interface Reg30Report {
   confidence: number;
   recommendation: ActionRecommendation;
   link?: string;
+  attachment_link?: string;
+  attachment_text?: string;
   extracted_data: any;
   evidence_spans: string[];
+  missing_fields?: string[];
+  scoring_factors?: string[];
+  raw_text?: string;
+  order_value_cr?: number | null;
+  
+  // NEW: EVENT ANALYSIS FIELDS
+  event_analysis_text?: string;
+  institutional_risk?: 'LOW' | 'MED' | 'HIGH';
+  policy_bias?: 'TAILWIND' | 'HEADWIND' | 'NEUTRAL';
+  policy_event?: string | null;
+  tactical_plan?: 'BUY_DIP' | 'WAIT_CONFIRMATION' | 'MOMENTUM_OK' | 'AVOID_CHASE';
+  trigger_text?: string;
 }
