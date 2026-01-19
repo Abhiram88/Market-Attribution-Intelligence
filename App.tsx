@@ -6,19 +6,25 @@ import { Reg30Tab } from './components/Reg30Tab';
 import { NiftyRealtimeCard } from './components/NiftyRealtimeCard';
 import { HistoricalCloseCard } from './components/HistoricalCloseCard';
 import { BreezeTokenModal } from './components/BreezeTokenModal';
-import { MarketLog, Sentiment, AppTab } from './types';
+import { MarketLog, Sentiment, AppTab, NewsAttribution } from './types';
 import { supabase } from './lib/supabase';
-import { analyzeMarketLog } from './services/geminiService';
+import { analyzeMarketLog, analyzeStockIntelligence } from './services/geminiService';
 import { fetchRealtimeMarketTelemetry, getMarketSessionStatus } from './services/marketService';
 import { checkProxyHealth } from './services/breezeService';
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<AppTab>('live');
+  const [intelTab, setIntelTab] = useState<'market' | 'stock'>('market');
   const [logs, setLogs] = useState<MarketLog[]>([]);
   const [selectedLog, setSelectedLog] = useState<MarketLog | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<{ message: string; type?: 'token' | 'generic' } | null>(null);
   const [showTokenModal, setShowTokenModal] = useState(false);
+
+  // Stock Intelligence State
+  const [stockSearchQuery, setStockSearchQuery] = useState('');
+  const [stockIntel, setStockIntel] = useState<NewsAttribution | null>(null);
+  const [isStockAnalyzing, setIsStockAnalyzing] = useState(false);
   
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isUpdatingRef = useRef(false);
@@ -83,6 +89,23 @@ const App: React.FC = () => {
     }
   }, [isAnalyzing]);
 
+  const handleRunStockAnalysis = async () => {
+    if (!stockSearchQuery.trim() || isStockAnalyzing) return;
+    
+    setIsStockAnalyzing(true);
+    setStockIntel(null);
+    const today = logs[0]?.date || new Date().toISOString().split('T')[0];
+    
+    try {
+      const intel = await analyzeStockIntelligence(stockSearchQuery.toUpperCase().trim(), today);
+      setStockIntel(intel);
+    } catch (err: any) {
+      alert(`Equity synthesis failed: ${err.message}`);
+    } finally {
+      setIsStockAnalyzing(false);
+    }
+  };
+
   const updateTelemetry = async () => {
     if (isUpdatingRef.current) return;
     isUpdatingRef.current = true;
@@ -106,15 +129,12 @@ const App: React.FC = () => {
       
       setLogs(prev => {
         const existingLog = prev.find(l => l.date === latestLog.date);
-        
-        // Instant Merging: Always prioritize the newest non-zero data
         const mergedLog = {
           ...latestLog,
           niftyChange: (latestLog.niftyChange !== 0 || !existingLog) ? latestLog.niftyChange : (existingLog.niftyChange || 0),
           volume: (latestLog.volume !== 0 || !existingLog) ? latestLog.volume : (existingLog.volume || 0),
           attribution: latestLog.attribution || existingLog?.attribution
         };
-
         const otherLogs = prev.filter(l => l.date !== latestLog.date);
         return [mergedLog, ...otherLogs];
       });
@@ -142,7 +162,6 @@ const App: React.FC = () => {
   const startPolling = () => {
     if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     updateTelemetry();
-    // 2 second high-frequency poll for a "Real-time" feel
     pollIntervalRef.current = setInterval(updateTelemetry, 2000); 
   };
 
@@ -251,77 +270,202 @@ const App: React.FC = () => {
                 </div>
               )}
 
-              <div className="bg-white p-10 sm:p-14 rounded-[3.5rem] border border-slate-200 shadow-2xl relative overflow-hidden group w-full">
-                {todayAttr ? (
-                  <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
-                    <div className="flex items-start justify-between mb-8">
-                      <div className="flex items-center gap-5">
-                        <div className={`w-3 h-10 rounded-full ${latest.niftyChange >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-                        <h2 className="text-3xl sm:text-5xl font-black text-slate-900 tracking-tight leading-tight uppercase max-w-4xl">{todayAttr.headline}</h2>
+              {/* TWO-TAB INTELLIGENCE CONTAINER */}
+              <div className="bg-white rounded-[3.5rem] border border-slate-200 shadow-2xl relative overflow-hidden group w-full flex flex-col">
+                
+                {/* INNER TAB NAV */}
+                <div className="px-10 pt-10 flex flex-col sm:flex-row items-center justify-between gap-6 border-b border-slate-50 pb-6">
+                  <div className="flex bg-slate-50 p-1.5 rounded-2xl border border-slate-200/50">
+                    <button 
+                      onClick={() => setIntelTab('market')} 
+                      className={`px-8 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${intelTab === 'market' ? 'bg-white text-indigo-600 shadow-sm border border-slate-200' : 'text-slate-400'}`}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4"><path d="M10 3.5a.5.5 0 0 0-.5-.5h-4a.5.5 0 0 0-.5.5v10a.5.5 0 0 0 .5.5h4a.5.5 0 0 0 .5-.5v-10ZM10.5 3a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 .5.5v10a.5.5 0 0 1-.5.5h-4a.5.5 0 0 1-.5-.5v-10Z" /><path fillRule="evenodd" d="M2.5 16a.5.5 0 0 1 .5-.5h14a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5Z" clipRule="evenodd" /></svg>
+                      Market Radar
+                    </button>
+                    <button 
+                      onClick={() => setIntelTab('stock')} 
+                      className={`px-8 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${intelTab === 'stock' ? 'bg-white text-indigo-600 shadow-sm border border-slate-200' : 'text-slate-400'}`}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4"><path fillRule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm.75-13a.75.75 0 0 0-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 0 0 0-1.5h-3.25V5Z" clipRule="evenodd" /></svg>
+                      Equity Deep Dive
+                    </button>
+                  </div>
+
+                  {intelTab === 'stock' && (
+                    <div className="flex items-center gap-3 w-full sm:w-auto">
+                      <div className="relative flex-1 sm:w-64">
+                        <input 
+                          type="text" 
+                          placeholder="Stock Symbol (e.g. RELIANCE)"
+                          value={stockSearchQuery}
+                          onChange={(e) => setStockSearchQuery(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && handleRunStockAnalysis()}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-5 py-2.5 text-xs font-black uppercase tracking-widest outline-none focus:ring-4 ring-indigo-500/10 transition-all"
+                        />
                       </div>
                       <button 
-                        onClick={() => handleRunAnalysis(latest)} 
-                        disabled={isAnalyzing}
-                        className="p-4 bg-slate-50 hover:bg-indigo-50 text-indigo-600 rounded-2xl border border-slate-200 transition-all shadow-sm group/sync"
-                        title="Sync Today's News Intelligence"
+                        onClick={handleRunStockAnalysis}
+                        disabled={isStockAnalyzing || !stockSearchQuery}
+                        className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-600/20 disabled:opacity-50"
                       >
-                         {isAnalyzing ? (
-                           <div className="w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-                         ) : (
-                           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-5 h-5 group-hover/sync:rotate-180 transition-transform duration-500">
-                             <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-                           </svg>
-                         )}
+                        {isStockAnalyzing ? 'Auditing...' : 'Analyze'}
                       </button>
                     </div>
-                    <div className="prose prose-slate max-w-none">
-                       <p className="text-slate-600 text-lg sm:text-xl leading-relaxed font-medium whitespace-pre-wrap">{todayAttr.narrative}</p>
-                    </div>
-                    
-                    <div className="mt-12 pt-10 border-t border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-end gap-10">
-                       <div className="space-y-4">
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Core Sentiment Alignment</p>
-                          <div className={`inline-flex items-center justify-center px-6 py-3 rounded-2xl text-[11px] font-black uppercase tracking-[0.2em] border shadow-sm ${
-                            todayAttr.sentiment === 'POSITIVE' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'
-                          }`}>
-                            {todayAttr.sentiment}
+                  )}
+                </div>
+
+                <div className="p-10 sm:p-14">
+                  {intelTab === 'market' ? (
+                    /* MARKET INTELLIGENCE CONTENT */
+                    todayAttr ? (
+                      <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
+                        <div className="flex items-start justify-between mb-8">
+                          <div className="flex items-center gap-5">
+                            <div className={`w-3 h-10 rounded-full ${latest.niftyChange >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                            <h2 className="text-3xl sm:text-5xl font-black text-slate-900 tracking-tight leading-tight uppercase max-w-4xl">{todayAttr.headline}</h2>
                           </div>
-                       </div>
-                       <div className="space-y-4 text-left md:text-right">
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Impacted Equities</p>
-                          <div className="flex flex-wrap md:justify-end gap-2">
-                             {todayAttr.affected_stocks?.map(s => (
-                               <span key={s} className="px-4 py-2 bg-[#4F46E5] text-white text-[10px] font-black rounded-xl uppercase tracking-widest hover:bg-indigo-700 transition-colors cursor-default">{s}</span>
-                             ))}
-                          </div>
-                       </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="py-24 text-center space-y-6">
-                    {isAnalyzing ? (
-                      <div className="inline-flex flex-col items-center animate-in fade-in duration-500">
-                        <div className="w-16 h-16 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-6" />
-                        <p className="text-slate-900 font-black uppercase text-xs tracking-[0.3em]">Synthesizing Intelligence Dossier...</p>
-                        <p className="text-slate-400 text-[10px] mt-2 font-bold uppercase tracking-widest">Grounded Google Search Contextualization in Progress</p>
+                          <button 
+                            onClick={() => handleRunAnalysis(latest)} 
+                            disabled={isAnalyzing}
+                            className="p-4 bg-slate-50 hover:bg-indigo-50 text-indigo-600 rounded-2xl border border-slate-200 transition-all shadow-sm group/sync"
+                          >
+                             {isAnalyzing ? (
+                               <div className="w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                             ) : (
+                               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-5 h-5 group-hover/sync:rotate-180 transition-transform duration-500">
+                                 <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                               </svg>
+                             )}
+                          </button>
+                        </div>
+                        <div className="prose prose-slate max-w-none">
+                           <p className="text-slate-600 text-lg sm:text-xl leading-relaxed font-medium whitespace-pre-wrap">{todayAttr.narrative}</p>
+                        </div>
+                        <div className="mt-12 pt-10 border-t border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-end gap-10">
+                           <div className="space-y-4">
+                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Sentiment Alignment</p>
+                              <div className={`inline-flex items-center justify-center px-6 py-3 rounded-2xl text-[11px] font-black uppercase tracking-[0.2em] border shadow-sm ${
+                                todayAttr.sentiment === 'POSITIVE' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'
+                              }`}>
+                                {todayAttr.sentiment}
+                              </div>
+                           </div>
+                           <div className="space-y-4 text-left md:text-right">
+                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Impacted Equities</p>
+                              <div className="flex flex-wrap md:justify-end gap-2">
+                                 {todayAttr.affected_stocks?.map(s => (
+                                   <span key={s} className="px-4 py-2 bg-[#4F46E5] text-white text-[10px] font-black rounded-xl uppercase tracking-widest hover:bg-indigo-700 transition-colors cursor-default">{s}</span>
+                                 ))}
+                              </div>
+                           </div>
+                        </div>
                       </div>
                     ) : (
-                      <div className="inline-flex flex-col items-center animate-in zoom-in duration-500">
-                        <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center text-slate-300 mb-6">
-                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-8 h-8"><path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" /></svg>
-                        </div>
-                        <p className="text-slate-900 font-black uppercase text-xs tracking-[0.3em]">No Intelligence Logged for Today</p>
-                        <p className="text-slate-400 text-[10px] mt-2 font-bold uppercase tracking-widest">Run the engine to fetch historical session drivers</p>
-                        <button 
-                          onClick={() => handleRunAnalysis(latest)} 
-                          className="mt-8 bg-indigo-600 text-white px-8 py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg shadow-indigo-600/20 hover:scale-105 transition-transform"
-                        >
-                          Run AI Analysis
-                        </button>
+                      <div className="py-24 text-center space-y-6">
+                        {isAnalyzing ? (
+                          <div className="inline-flex flex-col items-center">
+                            <div className="w-16 h-16 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-6" />
+                            <p className="text-slate-900 font-black uppercase text-xs tracking-[0.3em]">Synthesizing Nifty Dossier...</p>
+                          </div>
+                        ) : (
+                          <div className="inline-flex flex-col items-center">
+                            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center text-slate-300 mb-6">
+                              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-8 h-8"><path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" /></svg>
+                            </div>
+                            <p className="text-slate-900 font-black uppercase text-xs tracking-[0.3em]">Market Intelligence Awaiting Sync</p>
+                            <button onClick={() => handleRunAnalysis(latest)} className="mt-8 bg-indigo-600 text-white px-8 py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg shadow-indigo-600/20">Run AI Analysis</button>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                )}
+                    )
+                  ) : (
+                    /* STOCK INTELLIGENCE CONTENT */
+                    stockIntel ? (
+                      <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
+                        <div className="flex items-center gap-4 mb-8">
+                          <span className="bg-indigo-600 text-white text-[10px] font-black px-4 py-1.5 rounded-lg tracking-widest uppercase">Forensic Audit</span>
+                          <span className="text-slate-300 font-black text-[10px] uppercase tracking-widest">{latest.date}</span>
+                        </div>
+                        <h2 className="text-3xl sm:text-5xl font-black text-slate-900 tracking-tight leading-tight uppercase mb-8">{stockIntel.headline}</h2>
+                        
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
+                          <div className="lg:col-span-8 space-y-8">
+                            <div className="prose prose-slate max-w-none">
+                              <p className="text-slate-600 text-lg sm:text-xl leading-relaxed font-medium whitespace-pre-wrap">{stockIntel.narrative}</p>
+                            </div>
+                            
+                            <div className="flex flex-wrap gap-8 pt-6 border-t border-slate-100">
+                              <div className="space-y-4">
+                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Equity Bias</p>
+                                <div className={`px-6 py-3 rounded-2xl text-[11px] font-black uppercase tracking-[0.2em] border shadow-sm ${
+                                  stockIntel.sentiment === 'POSITIVE' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'
+                                }`}>
+                                  {stockIntel.sentiment}
+                                </div>
+                              </div>
+                              <div className="space-y-4">
+                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Causal Category</p>
+                                <div className="px-6 py-3 bg-slate-900 text-white rounded-2xl text-[11px] font-black uppercase tracking-[0.2em]">
+                                  {stockIntel.category || 'CORPORATE_ACTION'}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="lg:col-span-4 space-y-8">
+                             <div className="bg-slate-50 p-8 rounded-[2.5rem] border border-slate-200 shadow-sm space-y-6">
+                               <h4 className="text-[11px] font-black text-slate-900 uppercase tracking-widest flex items-center gap-3">
+                                 Analyst Recommendations
+                                 <div className="h-[1px] flex-1 bg-slate-200"></div>
+                               </h4>
+                               <div className="space-y-4">
+                                 {stockIntel.analyst_calls && stockIntel.analyst_calls.length > 0 ? (
+                                   stockIntel.analyst_calls.map((call, idx) => (
+                                     <div key={idx} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2 group hover:border-indigo-200 transition-all">
+                                       <div className="flex justify-between items-start">
+                                         <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded ${
+                                           call.rating.toUpperCase().includes('BUY') ? 'bg-emerald-100 text-emerald-700' : 
+                                           call.rating.toUpperCase().includes('SELL') ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600'
+                                         }`}>
+                                           {call.rating}
+                                         </span>
+                                         {call.target && (
+                                           <span className="text-[10px] font-black text-slate-900">Target: {call.target}</span>
+                                         )}
+                                       </div>
+                                       <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{call.source}</p>
+                                     </div>
+                                   ))
+                                 ) : (
+                                   <p className="text-[10px] font-bold text-slate-300 uppercase tracking-widest italic">No recent broker calls detected.</p>
+                                 )}
+                               </div>
+                             </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="py-24 text-center space-y-6">
+                        {isStockAnalyzing ? (
+                          <div className="inline-flex flex-col items-center">
+                            <div className="w-16 h-16 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-6" />
+                            <p className="text-slate-900 font-black uppercase text-xs tracking-[0.3em]">Auditing Corporate Telemetry...</p>
+                            <p className="text-slate-400 text-[10px] mt-2 font-bold uppercase tracking-widest">Searching Exchange Disclosures & News Anchors</p>
+                          </div>
+                        ) : (
+                          <div className="inline-flex flex-col items-center">
+                            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center text-slate-300 mb-6">
+                              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-8 h-8"><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" /></svg>
+                            </div>
+                            <p className="text-slate-900 font-black uppercase text-xs tracking-[0.3em]">Equity Forensic Engine Ready</p>
+                            <p className="text-slate-400 text-[10px] mt-2 font-bold uppercase tracking-widest">Enter any NSE symbol to extract specific session drivers</p>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  )}
+                </div>
               </div>
             </div>
           ) : activeTab === 'research' ? (

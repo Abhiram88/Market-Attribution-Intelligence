@@ -1,7 +1,12 @@
 
-
 export type Sentiment = 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL';
 export type MacroCategory = 'Geopolitical' | 'Monetary Policy' | 'Inflation' | 'Earnings' | 'Commodities' | 'Currency' | 'Global Markets' | 'Domestic Policy' | 'Risk-off' | 'Technical' | 'Other';
+
+export interface AnalystCall {
+  rating: string;
+  target?: string;
+  source: string;
+}
 
 export interface NewsAttribution {
   headline: string;
@@ -12,6 +17,7 @@ export interface NewsAttribution {
   sources?: { uri: string; title: string }[];
   affected_stocks?: string[];
   affected_sectors?: string[];
+  analyst_calls?: AnalystCall[];
 }
 
 export interface MarketLog {
