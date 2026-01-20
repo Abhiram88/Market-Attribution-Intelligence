@@ -9,6 +9,7 @@ import {
   reAnalyzeSingleEvent,
   regenerateNarrativeOnly
 } from '../services/reg30Service';
+import { supabase } from '../lib/supabase';
 import { SimulationModal } from './SimulationModal';
 
 interface RowStatus {
@@ -26,6 +27,7 @@ export const Reg30Tab: React.FC = () => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [reAnalyzingId, setReAnalyzingId] = useState<string | null>(null);
   const [generatingNarrativeId, setGeneratingNarrativeId] = useState<string | null>(null);
+  const [trackingSymbols, setTrackingSymbols] = useState<Set<string>>(new Set());
   
   // Pagination State
   const [visibleCount, setVisibleCount] = useState(30);
@@ -39,9 +41,22 @@ export const Reg30Tab: React.FC = () => {
 
   const totalCount = (xbrlFile?.count || 0) + (corpFile?.count || 0) + (crdFile?.count || 0);
 
+  // Fix: Added calculation for progressPercentage based on the auditLog status steps
+  const progressPercentage = useMemo(() => {
+    if (auditLog.length === 0) return 0;
+    const completedCount = auditLog.filter(item => item.step === 'COMPLETED' || item.step === 'FAILED').length;
+    return Math.round((completedCount / auditLog.length) * 100);
+  }, [auditLog]);
+
   const loadHistory = async () => {
     const history = await fetchAnalyzedEvents();
     setReports(history);
+    
+    // Also load tracked symbols
+    const { data: tracked } = await supabase.from('priority_stocks').select('symbol');
+    if (tracked) {
+      setTrackingSymbols(new Set(tracked.map(s => s.symbol)));
+    }
   };
 
   useEffect(() => {
@@ -74,6 +89,28 @@ export const Reg30Tab: React.FC = () => {
     if (source === 'XBRL') setXbrlFile(null);
     if (source === 'CorporateActions') setCorpFile(null);
     if (source === 'CreditRating') setCrdFile(null);
+  };
+
+  const handleTrackStock = async (symbol: string, company: string) => {
+    if (!symbol) return;
+    
+    const isAlreadyTracked = trackingSymbols.has(symbol);
+    
+    if (isAlreadyTracked) {
+      const { error } = await supabase.from('priority_stocks').delete().eq('symbol', symbol);
+      if (!error) {
+        setTrackingSymbols(prev => {
+          const next = new Set(prev);
+          next.delete(symbol);
+          return next;
+        });
+      }
+    } else {
+      const { error } = await supabase.from('priority_stocks').upsert({ symbol, company_name: company });
+      if (!error) {
+        setTrackingSymbols(prev => new Set([...prev, symbol]));
+      }
+    }
   };
 
   const handleReAnalyze = async (report: Reg30Report) => {
@@ -167,16 +204,6 @@ export const Reg30Tab: React.FC = () => {
 
   const displayedReports = filtered.slice(0, visibleCount);
 
-  const currentProcessingRecord = useMemo(() => {
-    return auditLog.find(a => a.step !== 'COMPLETED' && a.step !== 'FAILED' && a.step !== 'PENDING');
-  }, [auditLog]);
-
-  const progressPercentage = useMemo(() => {
-    if (auditLog.length === 0) return 0;
-    const completed = auditLog.filter(a => a.step === 'COMPLETED' || a.step === 'FAILED').length;
-    return Math.round((completed / auditLog.length) * 100);
-  }, [auditLog]);
-
   return (
     <div className="w-full space-y-8 pb-20 animate-in fade-in duration-700">
       {/* NSE LINKS SECTION */}
@@ -216,12 +243,6 @@ export const Reg30Tab: React.FC = () => {
               </div>
               <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
                 <div className="h-full bg-indigo-500 transition-all duration-300" style={{ width: `${progressPercentage}%` }} />
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-                <p className="text-[11px] font-bold text-slate-300 truncate">
-                  {currentProcessingRecord ? `Processing: ${currentProcessingRecord.name} (${currentProcessingRecord.step})` : 'Finalizing batch persistence...'}
-                </p>
               </div>
             </div>
           )}
@@ -344,7 +365,18 @@ export const Reg30Tab: React.FC = () => {
                          </span>
                       </td>
                       <td className="px-10 py-8 text-right">
-                        <div className="flex justify-end gap-3">
+                        <div className="flex justify-end items-center gap-3">
+                          <button 
+                            onClick={() => handleTrackStock(r.symbol || '', r.company_name)}
+                            className={`p-2 rounded-lg transition-all ${
+                              trackingSymbols.has(r.symbol || '') 
+                              ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' 
+                              : 'text-slate-300 hover:text-indigo-600 hover:bg-slate-100'
+                            }`}
+                            title={trackingSymbols.has(r.symbol || '') ? "Un-Track Stock" : "Track for Priority Watchlist"}
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" fill={trackingSymbols.has(r.symbol || '') ? "currentColor" : "none"} viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z" /></svg>
+                          </button>
                           <button 
                             onClick={() => handleReAnalyze(r)}
                             disabled={reAnalyzingId === r.id}
@@ -399,10 +431,6 @@ export const Reg30Tab: React.FC = () => {
                               <div className="bg-white p-6 rounded-[2.5rem] border border-slate-200 shadow-xl space-y-5 flex flex-col min-h-[300px]">
                                 <div className="flex items-center justify-between border-b border-slate-50 pb-3">
                                   <h4 className="text-[11px] font-black text-slate-900 uppercase tracking-widest">Event Analysis</h4>
-                                  <div className={`flex items-center gap-2`}>
-                                     <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{r.impact_score >= 50 ? 'Active' : 'Locked'}</span>
-                                     <div className={`w-2 h-2 rounded-full ${r.impact_score >= 50 ? 'bg-emerald-500 animate-pulse' : 'bg-slate-200'}`}></div>
-                                  </div>
                                 </div>
                                 
                                 {r.impact_score >= 50 ? (
@@ -413,32 +441,16 @@ export const Reg30Tab: React.FC = () => {
                                           <p className="text-[11px] font-medium text-slate-600 leading-relaxed italic border-l-2 border-indigo-100 pl-4 py-1">
                                             {r.event_analysis_text}
                                           </p>
-                                          <button 
-                                            onClick={() => handleRegenerateNarrative(r)}
-                                            disabled={generatingNarrativeId === r.id}
-                                            className="text-[8px] font-black text-indigo-600 uppercase tracking-widest hover:underline flex items-center gap-1 opacity-50 hover:opacity-100 transition-opacity"
-                                          >
-                                            {generatingNarrativeId === r.id ? 'Regenerating...' : 'Refresh Tactical Narrative'}
-                                          </button>
                                         </div>
                                       ) : (
                                         <div className="py-12 flex flex-col items-center gap-4 text-center">
-                                          {generatingNarrativeId === r.id ? (
-                                            <>
-                                              <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
-                                              <p className="text-[10px] font-black text-slate-300 uppercase">Synthesizing tactical overview...</p>
-                                            </>
-                                          ) : (
-                                            <>
-                                              <p className="text-[10px] font-black text-slate-300 uppercase leading-relaxed px-4">Tactical narrative missing for high-impact event.</p>
-                                              <button 
-                                                onClick={() => handleRegenerateNarrative(r)}
-                                                className="px-6 py-2.5 bg-indigo-600 text-white rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-md"
-                                              >
-                                                Generate Analysis
-                                              </button>
-                                            </>
-                                          )}
+                                          <p className="text-[10px] font-black text-slate-300 uppercase leading-relaxed px-4">Tactical narrative missing.</p>
+                                          <button 
+                                            onClick={() => handleRegenerateNarrative(r)}
+                                            className="px-6 py-2.5 bg-indigo-600 text-white rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-md"
+                                          >
+                                            Generate Analysis
+                                          </button>
                                         </div>
                                       )}
                                     </div>
@@ -459,22 +471,9 @@ export const Reg30Tab: React.FC = () => {
                                         }`}>{r.policy_bias || 'NEUTRAL'}</span>
                                       </div>
                                     </div>
-
-                                    <div className="space-y-2 pt-4 border-t border-slate-50">
-                                      <div className="flex items-center gap-2">
-                                        <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Tactical Plan:</p>
-                                        <span className="bg-indigo-600 text-white text-[9px] font-black px-2 py-0.5 rounded-md uppercase tracking-widest">{r.tactical_plan?.replace(/_/g, ' ') || 'MOMENTUM OK'}</span>
-                                      </div>
-                                      <p className="text-[10px] font-bold text-slate-900 leading-tight bg-slate-50 p-2.5 rounded-xl border border-slate-100">
-                                        {r.trigger_text || "OK to watch breakout confirmation; avoid thin volume."}
-                                      </p>
-                                    </div>
                                   </div>
                                 ) : (
                                   <div className="flex-1 flex flex-col items-center justify-center py-8 text-center space-y-4 opacity-50 grayscale">
-                                    <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-300 border border-slate-100">
-                                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" /></svg>
-                                    </div>
                                     <p className="text-[9px] font-black text-slate-400 uppercase leading-relaxed max-w-[180px]">
                                       Tactical analysis disabled for events with impact score &lt; 50.
                                     </p>
@@ -492,18 +491,6 @@ export const Reg30Tab: React.FC = () => {
             </tbody>
           </table>
         </div>
-        
-        {/* LOAD MORE BUTTON */}
-        {filtered.length > visibleCount && (
-          <div className="p-10 border-t border-slate-50 flex justify-center bg-slate-50/20">
-            <button 
-              onClick={() => setVisibleCount(prev => prev + 30)}
-              className="px-12 py-3 bg-white border border-slate-200 text-indigo-600 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
-            >
-              Load More ({filtered.length - visibleCount} remaining)
-            </button>
-          </div>
-        )}
       </div>
       {showSimulation && <SimulationModal onClose={() => setShowSimulation(false)} />}
     </div>

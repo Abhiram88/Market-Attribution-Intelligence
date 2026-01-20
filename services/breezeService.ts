@@ -2,10 +2,11 @@
 /**
  * ICICI BREEZE API CLIENT
  */
+import { supabase } from '../lib/supabase';
 
 const DEFAULT_PROXY_URL = "https://breeze-proxy-919207294606.us-west1.run.app";
 
-interface BreezeQuote {
+export interface BreezeQuote {
   last_traded_price: number;
   change: number;
   percent_change: number;
@@ -14,15 +15,7 @@ interface BreezeQuote {
   low: number;
   previous_close: number;
   volume: number;
-}
-
-interface BreezeHistorical {
-  date: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
+  stock_code?: string;
 }
 
 const resolveApiUrl = (endpoint: string) => {
@@ -56,6 +49,20 @@ export const checkProxyHealth = async () => {
   }
 };
 
+/**
+ * Maps Standard Symbols to ICICI ShortNames via the Database
+ */
+export const getStockMappings = async (symbols: string[]): Promise<Record<string, string>> => {
+  if (symbols.length === 0) return {};
+  const { data, error } = await supabase
+    .from('nse_master_list')
+    .select('symbol, short_name')
+    .in('symbol', symbols);
+  
+  if (error || !data) return {};
+  return data.reduce((acc, curr) => ({ ...acc, [curr.symbol]: curr.short_name }), {});
+};
+
 export const setDailyBreezeSession = async (apiSession: string, adminKey: string) => {
   const apiUrl = resolveApiUrl(`/api/breeze/admin/api-session`);
   
@@ -80,10 +87,11 @@ export const setDailyBreezeSession = async (apiSession: string, adminKey: string
   return json;
 };
 
-export const fetchBreezeNiftyQuote = async (): Promise<BreezeQuote> => {
+export const fetchBreezeQuote = async (stockCode: string): Promise<BreezeQuote> => {
   const apiUrl = resolveApiUrl(`/api/breeze/quotes`);
   const proxyKey = localStorage.getItem('breeze_proxy_key') || "";
 
+  // Strictly follow the format required: exchange_code and stock_code
   const response = await fetch(apiUrl, {
     method: 'POST',
     headers: {
@@ -92,7 +100,7 @@ export const fetchBreezeNiftyQuote = async (): Promise<BreezeQuote> => {
       'Accept': 'application/json'
     },
     body: JSON.stringify({
-      stock_code: 'NIFTY',
+      stock_code: stockCode,
       exchange_code: 'NSE',
       product_type: 'cash'
     })
@@ -108,19 +116,18 @@ export const fetchBreezeNiftyQuote = async (): Promise<BreezeQuote> => {
   
   if (!response.ok) throw new Error(json.message || `Quote fetch failed: ${response.status}`);
 
-  const row = Array.isArray(json.Success) ? json.Success.find((x: any) => x.exchange_code === "NSE") : null;
+  // ICICI returns multiple rows sometimes (NSE/BSE), we find the NSE one
+  const row = Array.isArray(json.Success) 
+    ? json.Success.find((x: any) => x.exchange_code === "NSE" || x.stock_code === stockCode) 
+    : (json.Success?.[0]);
   
   if (!row) {
-    throw new Error("No NSE quote row returned");
+    throw new Error(`No quote data for ${stockCode}`);
   }
 
-  // Improved extraction logic for Indices: 
   const ltp = parseFloat(row.ltp || 0);
   const prevClose = parseFloat(row.previous_close || 0);
-  // Indices often use 'chng' or 'net_change' or just 'change'
-  const changeVal = parseFloat(row.change || row.chng || row.net_change || (ltp - prevClose) || 0);
-  // Volume can be 'total_volume', 'DayVolume', or 'volume'
-  const volumeVal = parseFloat(row.total_volume || row.volume || row.DayVolume || 0);
+  const changeVal = parseFloat(row.change || (ltp - prevClose) || 0);
 
   return {
     last_traded_price: ltp,
@@ -130,51 +137,9 @@ export const fetchBreezeNiftyQuote = async (): Promise<BreezeQuote> => {
     high: parseFloat(row.high || 0),
     low: parseFloat(row.low || 0),
     previous_close: prevClose,
-    volume: volumeVal
+    volume: parseFloat(row.total_volume || row.volume || 0),
+    stock_code: stockCode
   };
 };
 
-export const fetchBreezeHistoricalData = async (date: string): Promise<BreezeHistorical> => {
-  const apiUrl = resolveApiUrl(`/api/breeze/historical`);
-  const proxyKey = localStorage.getItem('breeze_proxy_key') || "";
-
-  const response = await fetch(apiUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Proxy-Key': proxyKey,
-      'Accept': 'application/json'
-    },
-    body: JSON.stringify({
-      date,
-      stock_code: 'NIFTY',
-      exchange_code: 'NSE',
-      product_type: 'cash'
-    })
-  });
-
-  const text = await response.text();
-  let json;
-  try {
-    json = JSON.parse(text);
-  } catch (e) {
-    throw new Error("Historical Proxy returned non-JSON.");
-  }
-  
-  if (!response.ok) throw new Error(json.message || `Historical Proxy error: ${response.status}`);
-
-  const rows = json.Success;
-  if (!Array.isArray(rows) || rows.length === 0) {
-    throw new Error(`No historical data found for ${date}`);
-  }
-
-  const r = rows[rows.length - 1]; 
-  return {
-    date,
-    open: parseFloat(r.open),
-    high: parseFloat(r.high),
-    low: parseFloat(r.low),
-    close: parseFloat(r.close),
-    volume: parseFloat(r.volume || 0)
-  };
-};
+export const fetchBreezeNiftyQuote = () => fetchBreezeQuote('NIFTY');
