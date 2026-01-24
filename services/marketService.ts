@@ -36,8 +36,35 @@ export const getMarketSessionStatus = (): { isOpen: boolean; label: string; colo
 
 export const fetchRealtimeMarketTelemetry = async (): Promise<MarketLog> => {
   const isSimulation = localStorage.getItem('breeze_simulation_mode') === 'true';
+  const sessionStatus = getMarketSessionStatus();
   const today = new Date().toISOString().split('T')[0];
   const now = Date.now();
+
+  // GUARD: If market is closed and not in simulation, bypass proxy and fetch from DB cache immediately
+  if (!sessionStatus.isOpen && !isSimulation) {
+    const { data: cached } = await supabase
+      .from('market_logs')
+      .select('*')
+      .order('log_date', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (cached) {
+      return {
+        id: cached.id,
+        date: cached.log_date,
+        niftyClose: cached.ltp,
+        niftyChange: cached.points_change,
+        niftyChangePercent: cached.change_percent,
+        thresholdMet: Math.abs(cached.change_percent || 0) > 0.4,
+        isAnalyzing: false,
+        dayHigh: cached.day_high,
+        dayLow: cached.day_low,
+        volume: cached.volume,
+        dataSource: 'Cache (Market Closed)'
+      };
+    }
+  }
   
   try {
     const quote = await fetchBreezeNiftyQuote();
@@ -91,7 +118,7 @@ export const fetchRealtimeMarketTelemetry = async (): Promise<MarketLog> => {
   } catch (error: any) {
     consecutiveFailures++;
     
-    // Fallback to cache
+    // Fallback to cache on errors
     const { data } = await supabase
       .from('market_logs')
       .select('*')
@@ -112,7 +139,6 @@ export const fetchRealtimeMarketTelemetry = async (): Promise<MarketLog> => {
       dayHigh: data.day_high,
       dayLow: data.day_low,
       volume: data.volume,
-      // Only flip the label to "Last Known" if we have failed consistently
       dataSource: consecutiveFailures >= FAILURE_THRESHOLD ? 'Breeze (Last Known)' : 'Breeze Direct'
     };
   }

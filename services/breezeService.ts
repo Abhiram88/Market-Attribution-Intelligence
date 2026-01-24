@@ -25,6 +25,19 @@ export interface BreezeQuote {
   previous_close: number;
   volume: number;
   stock_code?: string;
+  best_bid_price?: number;
+  best_bid_quantity?: number;
+  best_offer_price?: number;
+  best_offer_quantity?: number;
+}
+
+export interface HistoricalBar {
+  datetime: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
 }
 
 const resolveApiUrl = (endpoint: string) => {
@@ -158,8 +171,55 @@ export const fetchBreezeQuote = async (stockCode: string): Promise<BreezeQuote> 
     low: parseFloat(row.low || 0),
     previous_close: prevClose,
     volume: parseFloat(row.total_volume || row.volume || 0),
-    stock_code: stockCode
+    stock_code: stockCode,
+    best_bid_price: parseFloat(row.best_bid_price || 0),
+    best_bid_quantity: parseFloat(row.best_bid_quantity || 0),
+    best_offer_price: parseFloat(row.best_offer_price || 0),
+    best_offer_quantity: parseFloat(row.best_offer_quantity || 0)
   };
+};
+
+export const fetchBreezeHistorical = async (stockCode: string, fromDate: string, toDate: string, interval: string = '1day'): Promise<HistoricalBar[]> => {
+  const apiUrl = resolveApiUrl(`/api/breeze/historical`);
+  const proxyKey = localStorage.getItem('breeze_proxy_key') || "";
+
+  const response = await fetch(apiUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Proxy-Key': proxyKey,
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify({
+      stock_code: stockCode,
+      exchange_code: 'NSE',
+      product_type: 'cash',
+      from_date: fromDate,
+      to_date: toDate,
+      interval: interval
+    })
+  });
+
+  const text = await response.text();
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    throw new Error("Breeze Proxy returned non-JSON.");
+  }
+
+  if (!response.ok) throw new Error(json.message || `Historical fetch failed: ${response.status}`);
+
+  if (!json.Success || !Array.isArray(json.Success)) return [];
+
+  return json.Success.map((bar: any) => ({
+    datetime: bar.datetime,
+    open: parseFloat(bar.open),
+    high: parseFloat(bar.high),
+    low: parseFloat(bar.low),
+    close: parseFloat(bar.close),
+    volume: parseFloat(bar.volume)
+  }));
 };
 
 export const fetchBreezeNiftyQuote = () => fetchBreezeQuote('NIFTY');

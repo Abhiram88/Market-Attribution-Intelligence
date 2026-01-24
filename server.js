@@ -131,11 +131,11 @@ app.post('/api/breeze/quotes', async (req, res) => {
  */
 app.post('/api/breeze/historical', async (req, res) => {
   try {
-    const { date, stock_code, exchange_code, product_type } = req.body;
+    const { from_date, to_date, stock_code, exchange_code, product_type, interval = '1day' } = req.body;
     const payload = {
-      interval: '1day',
-      from_date: `${date}T09:00:00.000Z`,
-      to_date: `${date}T16:00:00.000Z`,
+      interval: interval,
+      from_date: from_date.includes('T') ? from_date : `${from_date}T09:00:00.000Z`,
+      to_date: to_date.includes('T') ? to_date : `${to_date}T16:00:00.000Z`,
       stock_code,
       exchange_code,
       product_type

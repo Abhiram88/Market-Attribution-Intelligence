@@ -135,3 +135,19 @@ export interface Reg30Report {
   tactical_plan?: 'BUY_DIP' | 'WAIT_CONFIRMATION' | 'MOMENTUM_OK' | 'AVOID_CHASE';
   trigger_text?: string;
 }
+
+/**
+ * MARKET MICROSTRUCTURE TYPES
+ */
+export interface LiquidityMetrics {
+  spread_pct: number | null;
+  depth_ratio: number;
+  vol_ratio: number;
+  regime: 'BREAKOUT' | 'DISTRIBUTION' | 'NEUTRAL';
+  execution_style: 'LIMIT ONLY' | 'OK FOR MARKET' | 'AVOID';
+  bid: number;
+  ask: number;
+  bidQty: number;
+  askQty: number;
+  avg_vol_20d: number;
+}
