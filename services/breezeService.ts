@@ -6,6 +6,15 @@ import { supabase } from '../lib/supabase';
 
 const DEFAULT_PROXY_URL = "https://breeze-proxy-919207294606.us-west1.run.app";
 
+// Hardcoded fallbacks for known problematic symbols
+const HARDCODED_MAPPINGS: Record<string, string> = {
+  'AHLUCONT': 'AHLCON',
+  'AXISCADES': 'AXIIT',
+  'MEDICO': 'MEDREM',
+  'WAAREERTL': 'SANADV',
+  'SANGHVIMOV': 'SANMOV'
+};
+
 export interface BreezeQuote {
   last_traded_price: number;
   change: number;
@@ -54,13 +63,26 @@ export const checkProxyHealth = async () => {
  */
 export const getStockMappings = async (symbols: string[]): Promise<Record<string, string>> => {
   if (symbols.length === 0) return {};
-  const { data, error } = await supabase
-    .from('nse_master_list')
-    .select('symbol, short_name')
-    .in('symbol', symbols);
   
-  if (error || !data) return {};
-  return data.reduce((acc, curr) => ({ ...acc, [curr.symbol]: curr.short_name }), {});
+  // Start with hardcoded defaults
+  const results: Record<string, string> = { ...HARDCODED_MAPPINGS };
+
+  try {
+    const { data, error } = await supabase
+      .from('nse_master_list')
+      .select('symbol, short_name')
+      .in('symbol', symbols);
+    
+    if (!error && data) {
+      data.forEach(curr => {
+        results[curr.symbol] = curr.short_name;
+      });
+    }
+  } catch (e) {
+    console.warn("Symbol mapping fetch failed, using fallbacks.");
+  }
+  
+  return results;
 };
 
 export const setDailyBreezeSession = async (apiSession: string, adminKey: string) => {
@@ -91,7 +113,6 @@ export const fetchBreezeQuote = async (stockCode: string): Promise<BreezeQuote> 
   const apiUrl = resolveApiUrl(`/api/breeze/quotes`);
   const proxyKey = localStorage.getItem('breeze_proxy_key') || "";
 
-  // Strictly follow the format required: exchange_code and stock_code
   const response = await fetch(apiUrl, {
     method: 'POST',
     headers: {
@@ -116,7 +137,6 @@ export const fetchBreezeQuote = async (stockCode: string): Promise<BreezeQuote> 
   
   if (!response.ok) throw new Error(json.message || `Quote fetch failed: ${response.status}`);
 
-  // ICICI returns multiple rows sometimes (NSE/BSE), we find the NSE one
   const row = Array.isArray(json.Success) 
     ? json.Success.find((x: any) => x.exchange_code === "NSE" || x.stock_code === stockCode) 
     : (json.Success?.[0]);

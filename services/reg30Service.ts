@@ -59,15 +59,41 @@ export const fetchAttachmentText = async (url: string): Promise<string> => {
   }
 };
 
+const inferExecutionMonths = (eventDate: string, endDate: string | null): number | null => {
+  if (!eventDate || !endDate) return null;
+  try {
+    const start = new Date(eventDate);
+    const end = new Date(endDate);
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) return null;
+    const diffTime = Math.abs(end.getTime() - start.getTime());
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    return Math.round(diffDays / 30.44); // Approx months
+  } catch (e) {
+    return null;
+  }
+};
+
 const calculateScoreAndRecommendation = (
   family: Reg30EventFamily, 
   extracted: any, 
   confidence: number,
-  mCapCr: number | null
-): { impact_score: number; direction: Sentiment; recommendation: ActionRecommendation; factors: string[] } => {
+  mCapCr: number | null,
+  eventDate: string
+): { 
+  impact_score: number; 
+  direction: Sentiment; 
+  recommendation: ActionRecommendation; 
+  factors: string[];
+  conversion_bonus: number;
+  final_execution_months: number | null;
+  order_type: string;
+} => {
   let impact_score = 0;
   let direction: Sentiment = 'NEUTRAL';
   const factors: string[] = [];
+  let conversion_bonus = 0;
+  let final_execution_months: number | null = extracted.execution_months || (extracted.execution_years ? extracted.execution_years * 12 : null);
+  const order_type = extracted.order_type || "UNKNOWN";
 
   const addFactor = (pts: number, msg: string) => {
     impact_score += pts;
@@ -79,6 +105,7 @@ const calculateScoreAndRecommendation = (
     case 'ORDER_PIPELINE': {
       direction = 'POSITIVE';
       addFactor(family === 'ORDER_CONTRACT' ? 20 : 15, `Base weight for ${family.replace('_', ' ')}`);
+      
       if (extracted.order_value_cr) {
         const val = extracted.order_value_cr;
         const absoluteBonus = val >= 1000 ? 30 : val >= 500 ? 20 : val >= 100 ? 10 : 5;
@@ -86,8 +113,31 @@ const calculateScoreAndRecommendation = (
       } else {
         addFactor(-10, "Order value missing");
       }
+      
       const stageBonus = extracted.stage === 'LOA' ? 20 : extracted.stage === 'WO' ? 18 : extracted.stage === 'NTP' ? 15 : extracted.stage === 'L1' ? 12 : 5;
       addFactor(stageBonus, `Stage: ${extracted.stage || 'General'}`);
+
+      // CONVERSION BONUS LOGIC
+      if (!final_execution_months && extracted.end_date) {
+        final_execution_months = inferExecutionMonths(eventDate, extracted.end_date);
+      }
+
+      if (final_execution_months !== null) {
+        if (final_execution_months <= 6) conversion_bonus = 10;
+        else if (final_execution_months <= 12) conversion_bonus = 6;
+        else if (final_execution_months <= 24) conversion_bonus = 2;
+        else conversion_bonus = 0;
+      }
+
+      // Order type modifier
+      if (order_type === 'SUPPLY') conversion_bonus += 2;
+      else if (order_type === 'SERVICES') conversion_bonus += 1;
+
+      conversion_bonus = Math.min(conversion_bonus, 10);
+
+      if (conversion_bonus > 0) {
+        addFactor(conversion_bonus, `Conversion bonus (execution ~${final_execution_months || 'N/A'} months, type: ${order_type})`);
+      }
       break;
     }
     case 'CREDIT_RATING': {
@@ -112,7 +162,7 @@ const calculateScoreAndRecommendation = (
   else if (impact_score >= 75) recommendation = direction === 'POSITIVE' ? 'ACTIONABLE_BULLISH' : 'ACTIONABLE_BEARISH_RISK';
   else if (impact_score >= 55) recommendation = 'HIGH_PRIORITY_WATCH';
 
-  return { impact_score, direction, recommendation, factors };
+  return { impact_score, direction, recommendation, factors, conversion_bonus, final_execution_months, order_type };
 };
 
 const getDeterministicAnalysis = (report: Partial<Reg30Report>) => {
@@ -125,7 +175,7 @@ const getDeterministicAnalysis = (report: Partial<Reg30Report>) => {
 
   let risk: 'LOW' | 'MED' | 'HIGH' = 'LOW';
   if (stage === 'L1' || cond === 'HIGH') risk = 'HIGH';
-  else if (months > 36 || stage === 'OTHER') risk = 'MED';
+  else if ((months && months > 36) || stage === 'OTHER') risk = 'MED';
   else if (['LOA', 'WO', 'NTP'].includes(stage || "") && cond !== 'HIGH') risk = 'LOW';
 
   const isGovtSecure = /cpwd|nhai|metro|railways|govt|ministry/.test(customer);
@@ -233,7 +283,7 @@ export const runReg30Analysis = async (
 
       if (aiResult) {
         onRowProgress(c.id, 'SAVING');
-        const scoring = calculateScoreAndRecommendation(c.event_family!, aiResult.extracted, aiResult.confidence, null);
+        const scoring = calculateScoreAndRecommendation(c.event_family!, aiResult.extracted, aiResult.confidence, null, c.event_date);
         
         let analysisPayload: any = {};
         if (scoring.impact_score >= 50) {
@@ -289,6 +339,12 @@ export const runReg30Analysis = async (
           evidence_spans: aiResult.evidence_spans,
           missing_fields: aiResult.missing_fields,
           scoring_factors: scoring.factors,
+          
+          // CONVERSION METADATA
+          conversion_bonus: scoring.conversion_bonus,
+          execution_months: scoring.final_execution_months,
+          order_type: scoring.order_type,
+          
           ...analysisPayload
         };
 
@@ -415,7 +471,7 @@ export const reAnalyzeSingleEvent = async (report: Reg30Report): Promise<Reg30Re
   };
   const aiResult = await analyzeReg30Event(candidate);
   if (aiResult) {
-    const scoring = calculateScoreAndRecommendation(report.event_family, aiResult.extracted, aiResult.confidence, null);
+    const scoring = calculateScoreAndRecommendation(report.event_family, aiResult.extracted, aiResult.confidence, null, report.event_date);
     
     let analysisPayload: any = {};
     if (scoring.impact_score >= 50) {
@@ -444,7 +500,14 @@ export const reAnalyzeSingleEvent = async (report: Reg30Report): Promise<Reg30Re
       summary: aiResult.summary, impact_score: scoring.impact_score, action_recommendation: scoring.recommendation,
       extracted_json: aiResult.extracted, attachment_text: attachment_text, confidence: aiResult.confidence,
       direction: scoring.direction, stage: aiResult.extracted.stage, evidence_spans: aiResult.evidence_spans,
-      missing_fields: aiResult.missing_fields, scoring_factors: scoring.factors, ...analysisPayload
+      missing_fields: aiResult.missing_fields, scoring_factors: scoring.factors, 
+      
+      // CONVERSION METADATA
+      conversion_bonus: scoring.conversion_bonus,
+      execution_months: scoring.final_execution_months,
+      order_type: scoring.order_type,
+      
+      ...analysisPayload
     }).eq('id', report.id).select().single();
     return updated as any;
   }

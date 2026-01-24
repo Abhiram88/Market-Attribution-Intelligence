@@ -28,7 +28,6 @@ const App: React.FC = () => {
   
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isUpdatingRef = useRef(false);
-  const hasAttemptedAutoAnalysis = useRef<Set<string>>(new Set());
 
   const fetchHistory = async () => {
     try {
@@ -74,16 +73,15 @@ const App: React.FC = () => {
 
   const handleRunAnalysis = useCallback(async (targetLog: MarketLog) => {
     if (!targetLog || isAnalyzing) return;
-    
     setIsAnalyzing(true);
+    
     try {
       const attribution = await analyzeMarketLog(targetLog);
       setLogs(prev => prev.map(log => 
-        log.id === targetLog.id ? { ...log, attribution } : log
+        log.date === targetLog.date ? { ...log, attribution } : log
       ));
-      hasAttemptedAutoAnalysis.current.add(targetLog.date);
     } catch (err: any) {
-      console.warn("Analysis failed:", err.message);
+      alert(`Intelligence synthesis failed: ${err.message}`);
     } finally {
       setIsAnalyzing(false);
     }
@@ -133,26 +131,16 @@ const App: React.FC = () => {
           ...latestLog,
           niftyChange: (latestLog.niftyChange !== 0 || !existingLog) ? latestLog.niftyChange : (existingLog.niftyChange || 0),
           volume: (latestLog.volume !== 0 || !existingLog) ? latestLog.volume : (existingLog.volume || 0),
-          attribution: latestLog.attribution || existingLog?.attribution
+          attribution: existingLog?.attribution || latestLog.attribution
         };
         const otherLogs = prev.filter(l => l.date !== latestLog.date);
         return [mergedLog, ...otherLogs];
-      });
-
-      setLogs(currentLogs => {
-        const latest = currentLogs[0];
-        if (latest && !latest.attribution && !isAnalyzing && latest.thresholdMet && !hasAttemptedAutoAnalysis.current.has(latest.date)) {
-           handleRunAnalysis(latest);
-        }
-        return currentLogs;
       });
 
     } catch (err: any) {
       if (err.message === "BREEZE_SESSION_MISSING") {
         setError({ message: "Breeze Session Required", type: 'token' });
         setShowTokenModal(true);
-      } else if (!err.message.includes("Unexpected token '<'")) {
-        setError({ message: `Telemetry Link Failure: ${err.message}`, type: 'generic' });
       }
     } finally {
       isUpdatingRef.current = false;
@@ -162,7 +150,8 @@ const App: React.FC = () => {
   const startPolling = () => {
     if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     updateTelemetry();
-    pollIntervalRef.current = setInterval(updateTelemetry, 2000); 
+    // High frequency 1s polling for real-time terminal feel
+    pollIntervalRef.current = setInterval(updateTelemetry, 1000); 
   };
 
   const handleAuthComplete = () => {
@@ -192,12 +181,12 @@ const App: React.FC = () => {
     dayLow: 0,
     volume: 0,
     attribution: undefined,
-    dataSource: 'Awaiting...'
+    dataSource: 'Syncing...'
   };
   
   const todayAttr = latest.attribution;
   const sessionStatus = getMarketSessionStatus();
-  const isBreezeConnected = !error && (latest.dataSource === 'Breeze' || latest.dataSource === 'Breeze Direct');
+  const isBreezeConnected = !error && (latest.dataSource?.includes('Direct') || latest.dataSource?.includes('Breeze'));
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 transition-colors duration-500 font-sans selection:bg-indigo-500/30 overflow-x-hidden w-full flex flex-col">
@@ -214,7 +203,7 @@ const App: React.FC = () => {
               {isBreezeConnected && (
                 <div className="hidden sm:flex items-center gap-2 bg-emerald-50 border border-emerald-100 px-3 py-1.5 rounded-full animate-in fade-in zoom-in duration-500">
                   <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
-                  <span className="text-[9px] font-black text-emerald-600 uppercase tracking-widest">REAL-TIME LINK</span>
+                  <span className="text-[9px] font-black text-emerald-600 uppercase tracking-widest">LIVE FEED</span>
                 </div>
               )}
             </div>
@@ -242,7 +231,7 @@ const App: React.FC = () => {
           {activeTab === 'live' ? (
             <div className="w-full space-y-12 animate-in fade-in duration-700">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full">
-                <div className="min-h-[320px]">
+                <div className="min-h-[260px]">
                   <NiftyRealtimeCard 
                     price={latest.niftyClose} 
                     change={latest.niftyChange} 
@@ -256,16 +245,10 @@ const App: React.FC = () => {
                     errorMessage={error?.message}
                   />
                 </div>
-                <div className="min-h-[320px]">
+                <div className="min-h-[260px]">
                   <PriorityStocksCard />
                 </div>
               </div>
-
-              {error && (
-                <div className={`p-6 rounded-[2rem] border flex items-center justify-between gap-4 animate-in fade-in slide-in-from-top-2 w-full ${error.type === 'token' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
-                  <p className="text-xs font-bold uppercase tracking-wide">{error.message}</p>
-                </div>
-              )}
 
               {/* TWO-TAB INTELLIGENCE CONTAINER */}
               <div className="bg-white rounded-[3.5rem] border border-slate-200 shadow-2xl relative overflow-hidden group w-full flex flex-col">
@@ -286,26 +269,37 @@ const App: React.FC = () => {
                     </button>
                   </div>
 
-                  {/* Stock Search - Persistent for Stock Tab */}
-                  {intelTab === 'stock' && (
-                    <div className="flex items-center gap-3 bg-slate-50 p-1.5 rounded-2xl border border-slate-200/50 w-full sm:w-auto">
-                      <input 
-                        type="text" 
-                        placeholder="ENTER SYMBOL (e.g. RELIANCE)"
-                        className="bg-white px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest outline-none border border-slate-100 focus:border-indigo-500 transition-colors w-full sm:w-64"
-                        value={stockSearchQuery}
-                        onChange={(e) => setStockSearchQuery(e.target.value.toUpperCase())}
-                        onKeyDown={(e) => e.key === 'Enter' && handleRunStockAnalysis()}
-                      />
+                  <div className="flex items-center gap-3">
+                    {intelTab === 'market' && (
                       <button 
-                        onClick={handleRunStockAnalysis}
-                        disabled={isStockAnalyzing || !stockSearchQuery.trim()}
-                        className="px-6 py-2.5 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-600 transition-all disabled:opacity-30"
+                        onClick={() => handleRunAnalysis(latest)}
+                        disabled={isAnalyzing}
+                        className="px-6 py-2.5 bg-indigo-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-600/20 disabled:opacity-50"
                       >
-                        {isStockAnalyzing ? 'Scanning...' : 'Analyze'}
+                        {isAnalyzing ? 'Analyzing...' : todayAttr ? 'Refresh Intelligence' : 'Synthesize Intelligence'}
                       </button>
-                    </div>
-                  )}
+                    )}
+                    
+                    {intelTab === 'stock' && (
+                      <div className="flex items-center gap-3 bg-slate-50 p-1.5 rounded-2xl border border-slate-200/50 w-full sm:w-auto">
+                        <input 
+                          type="text" 
+                          placeholder="ENTER SYMBOL (e.g. RELIANCE)"
+                          className="bg-white px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest outline-none border border-slate-100 focus:border-indigo-500 transition-colors w-full sm:w-64"
+                          value={stockSearchQuery}
+                          onChange={(e) => setStockSearchQuery(e.target.value.toUpperCase())}
+                          onKeyDown={(e) => e.key === 'Enter' && handleRunStockAnalysis()}
+                        />
+                        <button 
+                          onClick={handleRunStockAnalysis}
+                          disabled={isStockAnalyzing || !stockSearchQuery.trim()}
+                          className="px-6 py-2.5 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-600 transition-all disabled:opacity-30"
+                        >
+                          {isStockAnalyzing ? 'Scanning...' : 'Analyze'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="p-10 sm:p-14">
@@ -323,8 +317,14 @@ const App: React.FC = () => {
                         </div>
                       </div>
                     ) : (
-                      <div className="py-24 text-center">
-                        <p className="text-slate-900 font-black uppercase text-xs tracking-[0.3em]">Market Intelligence Awaiting Sync</p>
+                      <div className="py-24 text-center space-y-6">
+                        <div className="w-20 h-20 bg-slate-50 rounded-[2.5rem] flex items-center justify-center text-slate-200 mx-auto">
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-10 h-10"><path strokeLinecap="round" strokeLinejoin="round" d="M12 18v-5.25m0 0a6.01 6.01 0 0 0 1.5-.189m-1.5.189a6.01 6.01 0 0 1-1.5-.189m3.75 7.478a12.06 12.06 0 0 1-4.5 0m3.75 2.383a14.406 14.406 0 0 1-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 1 0-7.517 0c.85.493 1.509 1.333 1.509 2.316V18" /></svg>
+                        </div>
+                        <div className="space-y-2">
+                          <p className="text-slate-900 font-black uppercase text-xs tracking-[0.3em]">Causal Engine Standby</p>
+                          <p className="text-slate-400 text-[11px] font-medium max-w-sm mx-auto leading-relaxed">Intelligence synthesis is manual to optimize API consumption. Click 'Synthesize Intelligence' to run analysis on today's session.</p>
+                        </div>
                       </div>
                     )
                   ) : (

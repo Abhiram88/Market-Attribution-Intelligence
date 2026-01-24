@@ -41,7 +41,6 @@ export const Reg30Tab: React.FC = () => {
 
   const totalCount = (xbrlFile?.count || 0) + (corpFile?.count || 0) + (crdFile?.count || 0);
 
-  // Fix: Added calculation for progressPercentage based on the auditLog status steps
   const progressPercentage = useMemo(() => {
     if (auditLog.length === 0) return 0;
     const completedCount = auditLog.filter(item => item.step === 'COMPLETED' || item.step === 'FAILED').length;
@@ -207,7 +206,7 @@ export const Reg30Tab: React.FC = () => {
   return (
     <div className="w-full space-y-8 pb-20 animate-in fade-in duration-700">
       {/* NSE LINKS SECTION */}
-      <div className="bg-white p-6 rounded-[2.5rem] border border-slate-200 shadow-sm flex flex-col md:flex-row items-center justify-between gap-6">
+      <div className="bg-white p-6 rounded-[2.5rem] border border-slate-200 shadow-sm flex flex-col md:flex-row items-center justify-between gap-6 shrink-0">
         <div>
           <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] mb-4">Important NSE Data Links</h3>
           <div className="flex flex-wrap gap-4">
@@ -232,7 +231,7 @@ export const Reg30Tab: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 shrink-0">
         <div className="bg-white p-10 rounded-[3rem] border border-slate-200 shadow-xl space-y-8">
           <h2 className="text-2xl font-black uppercase tracking-tighter text-slate-900">DAILY NSE CSV ANALYSIS</h2>
           {isProcessing && (
@@ -292,7 +291,7 @@ export const Reg30Tab: React.FC = () => {
         </div>
       </div>
 
-      <div className="bg-white p-6 rounded-[2.5rem] border border-slate-200 shadow-sm flex flex-wrap gap-8 items-end">
+      <div className="bg-white p-6 rounded-[2.5rem] border border-slate-200 shadow-sm flex flex-wrap gap-8 items-end shrink-0">
         <div className="flex-1 min-w-[300px] space-y-1">
           <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">SYMBOL / COMPANY</label>
           <input type="text" placeholder="Search symbols..." className="w-full bg-slate-50 border border-slate-100 rounded-xl px-4 py-3 text-xs outline-none focus:ring-2 ring-indigo-500/10" value={filterSymbol} onChange={e => { setFilterSymbol(e.target.value); setVisibleCount(30); }} />
@@ -303,7 +302,7 @@ export const Reg30Tab: React.FC = () => {
         </div>
       </div>
 
-      <div className="bg-white rounded-[3.5rem] border border-slate-200 shadow-2xl overflow-hidden">
+      <div className="bg-white rounded-[3.5rem] border border-slate-200 shadow-2xl overflow-hidden shrink-0">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm border-collapse min-w-[1200px]">
             <thead className="bg-slate-50/50 text-slate-400 uppercase text-[9px] font-black tracking-[0.2em] border-b border-slate-100">
@@ -414,6 +413,13 @@ export const Reg30Tab: React.FC = () => {
                               <div className="space-y-4">
                                 <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Evidence Extraction</h4>
                                 <div className="space-y-3">
+                                  {/* ADDED: Execution Timeline Evidence */}
+                                  {(r.event_family === 'ORDER_CONTRACT' || r.event_family === 'ORDER_PIPELINE') && (
+                                    <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-xl text-[10px] text-indigo-700 font-black uppercase tracking-wider">
+                                      Execution timeline: {r.extracted_data?.execution_months || 'N/A'} months 
+                                      {r.extracted_data?.end_date && ` (Ending: ${r.extracted_data.end_date})`}
+                                    </div>
+                                  )}
                                   {r.evidence_spans?.map((span, i) => (
                                     <div key={i} className="p-3 bg-white border border-slate-100 rounded-xl text-[10px] italic text-slate-500 font-medium">"{span}"</div>
                                   ))}

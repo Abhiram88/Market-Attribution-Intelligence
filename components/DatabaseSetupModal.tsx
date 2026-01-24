@@ -35,10 +35,14 @@ CREATE TABLE IF NOT EXISTS news_attribution (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- 3) Priority Stocks (Watchlist)
+-- 3) Priority Stocks (Watchlist with LTP Persistence)
 CREATE TABLE IF NOT EXISTS priority_stocks (
   symbol TEXT PRIMARY KEY,
   company_name TEXT,
+  last_price NUMERIC,
+  change_val NUMERIC,
+  change_percent NUMERIC,
+  last_updated TIMESTAMPTZ,
   added_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -92,6 +96,13 @@ CREATE TABLE IF NOT EXISTS analyzed_events (
   policy_event TEXT,
   tactical_plan TEXT,
   trigger_text TEXT,
+  
+  -- CONVERSION BONUS COLUMNS
+  conversion_bonus NUMERIC DEFAULT 0,
+  execution_months NUMERIC,
+  order_type TEXT,
+  inferred_execution_months NUMERIC,
+
   analysis_updated_at TIMESTAMPTZ DEFAULT now(),
   source_link TEXT,
   attachment_link TEXT,
@@ -165,11 +176,11 @@ ALTER TABLE research_status DISABLE ROW LEVEL SECURITY;`;
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/90 backdrop-blur-xl p-4 animate-in fade-in duration-300">
       <div className="bg-white w-full max-w-4xl max-h-[90vh] rounded-[3rem] shadow-2xl overflow-hidden border border-slate-100 flex flex-col">
-        <div className="p-8 bg-slate-900 text-white flex justify-between items-center">
+        <div className="p-8 bg-slate-900 text-white flex justify-between items-center shrink-0">
           <div>
             <h2 className="text-2xl font-black tracking-tight uppercase">Database Setup (Mapped Watchlist)</h2>
             <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-1">
-              Includes \`nse_master_list\` for ICICI symbol translation.
+              Includes `analyzed_events` update for Conversion Bonus.
             </p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors">
@@ -194,7 +205,7 @@ ALTER TABLE research_status DISABLE ROW LEVEL SECURITY;`;
             </pre>
           </div>
         </div>
-        <div className="p-8 bg-white border-t border-slate-100 flex justify-end">
+        <div className="p-8 bg-white border-t border-slate-100 flex justify-end shrink-0">
           <button onClick={onClose} className="px-10 py-4 rounded-2xl bg-slate-900 text-white font-black text-[10px] uppercase tracking-widest transition-all hover:bg-indigo-600">
             I've Updated My Database
           </button>

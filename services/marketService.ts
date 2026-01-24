@@ -3,15 +3,13 @@ import { MarketLog } from '../types';
 import { supabase } from '../lib/supabase';
 import { fetchBreezeNiftyQuote } from './breezeService';
 
-/**
- * Throttling state to prevent database overhead on high-frequency polling
- */
 let lastPersistTime = 0;
-const PERSIST_THROTTLE_MS = 30000; // Only write to DB every 30 seconds
+const PERSIST_THROTTLE_MS = 30000;
 
-/**
- * Checks if the Indian Market is currently in an active trading session (IST 09:15 - 15:30).
- */
+// Consistency Guard for Nifty labelling
+let consecutiveFailures = 0;
+const FAILURE_THRESHOLD = 3;
+
 export const getMarketSessionStatus = (): { isOpen: boolean; label: string; color: string } => {
   const isSimulation = localStorage.getItem('breeze_simulation_mode') === 'true';
   if (isSimulation) return { isOpen: true, label: "Simulated Session", color: "text-indigo-400" };
@@ -36,10 +34,6 @@ export const getMarketSessionStatus = (): { isOpen: boolean; label: string; colo
   return { isOpen: true, label: "Live Trading Session", color: "text-teal-400" };
 };
 
-/**
- * TELEMETRY INGESTION ENGINE
- * Fetches real-time data from Breeze and conditionally persists to Supabase Ledger.
- */
 export const fetchRealtimeMarketTelemetry = async (): Promise<MarketLog> => {
   const isSimulation = localStorage.getItem('breeze_simulation_mode') === 'true';
   const today = new Date().toISOString().split('T')[0];
@@ -47,6 +41,7 @@ export const fetchRealtimeMarketTelemetry = async (): Promise<MarketLog> => {
   
   try {
     const quote = await fetchBreezeNiftyQuote();
+    consecutiveFailures = 0; // Reset on success
     
     const payload = {
       log_date: today,
@@ -59,32 +54,21 @@ export const fetchRealtimeMarketTelemetry = async (): Promise<MarketLog> => {
       source: isSimulation ? 'Simulation' : 'Breeze'
     };
 
-    // PERFORMANCE OPTIMIZATION: 
-    // We fetch the data in real-time but only hit the database once every 30 seconds.
-    // This removes the 5-10s "lag" caused by waiting for Supabase writes on every tick.
     let recordId = 'ephemeral-id';
-    
     if (!isSimulation) {
       const shouldPersist = (now - lastPersistTime) > PERSIST_THROTTLE_MS;
-      
       if (shouldPersist) {
         const { data: finalRecord, error: upsertErr } = await supabase
           .from('market_logs')
           .upsert(payload, { onConflict: 'log_date' })
           .select()
           .single();
-
         if (!upsertErr && finalRecord) {
           recordId = finalRecord.id;
           lastPersistTime = now;
         }
       } else {
-        // Find existing ID for today if we aren't persisting yet
-        const { data: existing } = await supabase
-          .from('market_logs')
-          .select('id')
-          .eq('log_date', today)
-          .maybeSingle();
+        const { data: existing } = await supabase.from('market_logs').select('id').eq('log_date', today).maybeSingle();
         if (existing) recordId = existing.id;
       }
     }
@@ -105,7 +89,9 @@ export const fetchRealtimeMarketTelemetry = async (): Promise<MarketLog> => {
     };
 
   } catch (error: any) {
-    // Failover to Cache if API is unreachable
+    consecutiveFailures++;
+    
+    // Fallback to cache
     const { data } = await supabase
       .from('market_logs')
       .select('*')
@@ -126,7 +112,8 @@ export const fetchRealtimeMarketTelemetry = async (): Promise<MarketLog> => {
       dayHigh: data.day_high,
       dayLow: data.day_low,
       volume: data.volume,
-      dataSource: 'Cached'
+      // Only flip the label to "Last Known" if we have failed consistently
+      dataSource: consecutiveFailures >= FAILURE_THRESHOLD ? 'Breeze (Last Known)' : 'Breeze Direct'
     };
   }
 };
