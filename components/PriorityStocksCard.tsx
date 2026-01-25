@@ -48,30 +48,23 @@ export const PriorityStocksCard: React.FC = () => {
         
         const initialQuotes: Record<string, StockQuote> = {};
         data.forEach((stock: any) => {
-          if (stock.last_price !== null && stock.last_price !== undefined) {
-            initialQuotes[stock.symbol] = {
-              last_traded_price: stock.last_price,
-              change: stock.change_val || 0,
-              percent_change: stock.change_percent || 0,
-              lastUpdated: stock.last_updated ? new Date(stock.last_updated).getTime() : Date.now(),
-              isError: false,
-              open: 0, high: 0, low: 0, previous_close: 0, volume: 0
-            };
-          }
+          // Even if price is null, we initialize the object to prevent perpetual skeletons
+          // We use 0 as a visual fallback if DB is empty and fetch hasn't happened
+          initialQuotes[stock.symbol] = {
+            last_traded_price: stock.last_price || 0,
+            change: stock.change_val || 0,
+            percent_change: stock.change_percent || 0,
+            lastUpdated: stock.last_updated ? new Date(stock.last_updated).getTime() : Date.now(),
+            isError: false,
+            open: 0, high: 0, low: 0, previous_close: 0, volume: 0
+          };
         });
+        
         setQuotes(prev => ({ ...initialQuotes, ...prev }));
 
         const newMappings = await getStockMappings(data.map((s: any) => s.symbol));
         symbolMapRef.current = { ...symbolMapRef.current, ...newMappings };
         
-        // Only fetch historical if market open (or optionally always, but skip for now to save quota)
-        const marketStatus = getMarketSessionStatus();
-        if (marketStatus.isOpen) {
-          data.forEach((stock: any) => {
-            refreshHistoricalData(stock.symbol);
-          });
-        }
-
         return data;
       }
     } catch (e) {
@@ -106,10 +99,12 @@ export const PriorityStocksCard: React.FC = () => {
     }
   };
 
-  const updateQuotesBatch = async (stocks: PriorityStock[]) => {
-    // Market Status Guard: Don't poll if market is closed or tab is hidden
+  const updateQuotesBatch = async (stocks: PriorityStock[], forceOnce: boolean = false) => {
     const marketStatus = getMarketSessionStatus();
-    if (!marketStatus.isOpen || document.hidden) return; 
+    
+    // GUARD: If market is closed, only allow a fetch if forceOnce is true (initial population)
+    if (!marketStatus.isOpen && !forceOnce) return;
+    if (document.hidden) return; 
 
     if (stocks.length === 0 || isUpdatingRef.current) return;
     isUpdatingRef.current = true;
@@ -119,6 +114,7 @@ export const PriorityStocksCard: React.FC = () => {
       const iciciCode = symbolMapRef.current[stock.symbol] || stock.symbol;
       
       return new Promise<{ symbol: string, quote?: BreezeQuote, success: boolean }>(async (resolve) => {
+        // Stagger to respect rate limits
         await new Promise(r => setTimeout(r, index * 300));
         try {
           const quote = await fetchBreezeQuote(iciciCode);
@@ -169,7 +165,7 @@ export const PriorityStocksCard: React.FC = () => {
   const calculateMetrics = (symbol: string): LiquidityMetrics | null => {
     const q = quotes[symbol];
     const h = historicalCache[symbol];
-    if (!q) return null;
+    if (!q || q.last_traded_price === 0) return null;
 
     const bid = q.best_bid_price || 0;
     const ask = q.best_offer_price || 0;
@@ -180,13 +176,9 @@ export const PriorityStocksCard: React.FC = () => {
     let spread_pct: number | null = null;
     if (bid > 0 && ask > 0 && ask >= bid && mid > 0) {
       spread_pct = ((ask - bid) / mid) * 100;
-    } else if ((bid > 0 || ask > 0) && getMarketSessionStatus().isOpen) {
-      // Only warn if market is actually open
-      console.warn(`[Microstructure] Invalid spread data for ${symbol}: Bid=${bid}, Ask=${ask}`);
     }
 
     const depth_ratio = (bidQty + 1) / (askQty + 1);
-    
     const avgVol = h?.avg_vol_20d || null;
     const vol_ratio = (avgVol && q.volume) ? q.volume / avgVol : null;
 
@@ -207,19 +199,9 @@ export const PriorityStocksCard: React.FC = () => {
     }
 
     let exec: 'LIMIT ONLY' | 'OK FOR MARKET' | 'AVOID' = 'LIMIT ONLY';
-    if (spread_pct === null) {
-      exec = 'LIMIT ONLY';
-    } else if (spread_pct > 0.50) {
-      exec = 'AVOID';
-    } else if (spread_pct >= 0.15 && spread_pct <= 0.50) {
-      exec = 'LIMIT ONLY';
-    } else if (spread_pct < 0.15 && (vol_ratio === null || vol_ratio >= 1.2)) {
-      exec = 'OK FOR MARKET';
-    }
-    
-    if (vol_ratio !== null && vol_ratio < 1.0) {
-      exec = 'LIMIT ONLY';
-    }
+    if (spread_pct === null) exec = 'LIMIT ONLY';
+    else if (spread_pct > 0.50) exec = 'AVOID';
+    else if (spread_pct < 0.15) exec = 'OK FOR MARKET';
 
     return {
       spread_pct,
@@ -234,7 +216,7 @@ export const PriorityStocksCard: React.FC = () => {
 
   const getRecommendationHint = (metrics: LiquidityMetrics | null) => {
     const marketStatus = getMarketSessionStatus();
-    if (!marketStatus.isOpen) return "Market Closed - Stats Standby";
+    if (!marketStatus.isOpen) return "Market Closed - Last Ledger Displayed";
     if (!metrics) return "Awaiting depth...";
     if (metrics.execution_style === 'AVOID') return "Avoid thin liquidity";
     if (metrics.regime === 'DISTRIBUTION') return "Sell-on-news risk; wait";
@@ -259,39 +241,20 @@ export const PriorityStocksCard: React.FC = () => {
       const stocks = await fetchTrackedSymbols();
       const marketStatus = getMarketSessionStatus();
 
-      // Only perform proxy initial load if market is open
-      if (stocks.length > 0 && marketStatus.isOpen) {
-        const initialLoad = async () => {
-          setIsUpdating(true);
-          const requestPromises = stocks.map(async (stock, index) => {
-            const iciciCode = symbolMapRef.current[stock.symbol] || stock.symbol;
-            await new Promise(r => setTimeout(r, index * 200));
-            try {
-              const quote = await fetchBreezeQuote(iciciCode);
-              return { symbol: stock.symbol, quote, success: true };
-            } catch (error) {
-              return { symbol: stock.symbol, success: false };
-            }
-          });
-          const results = await Promise.all(requestPromises);
-          setQuotes(prev => {
-            const next = { ...prev };
-            results.forEach(res => {
-              if (res.success && res.quote) {
-                next[res.symbol] = { ...res.quote, lastUpdated: Date.now(), isError: false };
-              }
-            });
-            return next;
-          });
-          setIsUpdating(false);
-        };
+      // IF market is OPEN, or IF we have stocks with NO price (null in DB), perform a one-time fetch
+      const needsOneTimeFetch = marketStatus.isOpen || stocks.some(s => s.last_price === null || s.last_price === 0);
+      
+      if (stocks.length > 0 && needsOneTimeFetch) {
+        // Pass forceOnce=true to bypass the market-closed guard for this specific call
+        updateQuotesBatch(stocks, true);
         
-        initialLoad();
+        // Always try to fetch historical data on load if possible to calculate vol ratios
+        stocks.forEach(s => refreshHistoricalData(s.symbol));
       }
     };
     init();
 
-    // 4s polling for microstructure metrics (will be guarded inside updateQuotesBatch)
+    // 4s polling for microstructure metrics (strictly market hours only)
     pollInterval.current = setInterval(() => {
       setPriorityStocks(currentList => {
         const marketStatus = getMarketSessionStatus();
@@ -361,7 +324,7 @@ export const PriorityStocksCard: React.FC = () => {
                   </div>
                   
                   <div className="flex items-center gap-4">
-                    {quote ? (
+                    {quote && quote.last_traded_price > 0 ? (
                       <div className="text-right">
                         <p className="text-xs font-black text-slate-900 tabular-nums">
                           {quote.last_traded_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}
@@ -372,7 +335,10 @@ export const PriorityStocksCard: React.FC = () => {
                         </div>
                       </div>
                     ) : (
-                      <div className="w-12 h-3 bg-slate-200 rounded animate-pulse" />
+                      <div className="text-right">
+                         <p className="text-xs font-black text-slate-300 tabular-nums">0.00</p>
+                         <p className="text-[8px] font-black text-slate-200 uppercase">Awaiting...</p>
+                      </div>
                     )}
                     
                     <button 
