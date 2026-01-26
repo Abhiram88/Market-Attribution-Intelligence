@@ -48,8 +48,7 @@ export const PriorityStocksCard: React.FC = () => {
         
         const initialQuotes: Record<string, StockQuote> = {};
         data.forEach((stock: any) => {
-          // Even if price is null, we initialize the object to prevent perpetual skeletons
-          // We use 0 as a visual fallback if DB is empty and fetch hasn't happened
+          // Sync existing database values into the state immediately so the UI isn't empty on load
           initialQuotes[stock.symbol] = {
             last_traded_price: stock.last_price || 0,
             change: stock.change_val || 0,
@@ -101,8 +100,6 @@ export const PriorityStocksCard: React.FC = () => {
 
   const updateQuotesBatch = async (stocks: PriorityStock[], forceOnce: boolean = false) => {
     const marketStatus = getMarketSessionStatus();
-    
-    // GUARD: If market is closed, only allow a fetch if forceOnce is true (initial population)
     if (!marketStatus.isOpen && !forceOnce) return;
     if (document.hidden) return; 
 
@@ -112,9 +109,7 @@ export const PriorityStocksCard: React.FC = () => {
 
     const requestPromises = stocks.map((stock, index) => {
       const iciciCode = symbolMapRef.current[stock.symbol] || stock.symbol;
-      
       return new Promise<{ symbol: string, quote?: BreezeQuote, success: boolean }>(async (resolve) => {
-        // Stagger to respect rate limits
         await new Promise(r => setTimeout(r, index * 300));
         try {
           const quote = await fetchBreezeQuote(iciciCode);
@@ -129,35 +124,16 @@ export const PriorityStocksCard: React.FC = () => {
 
     for (const res of results) {
       if (res.success && res.quote) {
-        const quoteObj = {
-          ...res.quote,
-          lastUpdated: Date.now(),
-          isError: false
-        };
-
+        const quoteObj = { ...res.quote, lastUpdated: Date.now(), isError: false };
         setQuotes(prev => ({ ...prev, [res.symbol]: quoteObj }));
-
-        supabase
-          .from('priority_stocks')
-          .update({
-            last_price: res.quote.last_traded_price,
-            change_val: res.quote.change,
-            change_percent: res.quote.percent_change,
-            last_updated: new Date().toISOString()
-          })
-          .eq('symbol', res.symbol)
-          .then(); 
-      } else {
-        setQuotes(prev => {
-          if (!prev[res.symbol]) return prev;
-          return {
-            ...prev,
-            [res.symbol]: { ...prev[res.symbol], isError: true }
-          };
-        });
+        supabase.from('priority_stocks').update({
+          last_price: res.quote.last_traded_price,
+          change_val: res.quote.change,
+          change_percent: res.quote.percent_change,
+          last_updated: new Date().toISOString()
+        }).eq('symbol', res.symbol).then(); 
       }
     }
-
     setIsUpdating(false);
     isUpdatingRef.current = false;
   };
@@ -192,24 +168,18 @@ export const PriorityStocksCard: React.FC = () => {
     const close_pos = (close - low) / range;
     
     let regime: 'BREAKOUT' | 'DISTRIBUTION' | 'NEUTRAL' = 'NEUTRAL';
-    if (wick_ratio > 0.55 && close_pos < 0.35 && vol_ratio !== null && vol_ratio > 2.5) {
-        regime = 'DISTRIBUTION';
-    } else if (close_pos > 0.70 && vol_ratio !== null && vol_ratio > 2.0) {
-        regime = 'BREAKOUT';
-    }
+    if (wick_ratio > 0.55 && close_pos < 0.35 && vol_ratio !== null && vol_ratio > 2.5) regime = 'DISTRIBUTION';
+    else if (close_pos > 0.70 && vol_ratio !== null && vol_ratio > 2.0) regime = 'BREAKOUT';
 
     let exec: 'LIMIT ONLY' | 'OK FOR MARKET' | 'AVOID' = 'LIMIT ONLY';
-    if (spread_pct === null) exec = 'LIMIT ONLY';
-    else if (spread_pct > 0.50) exec = 'AVOID';
-    else if (spread_pct < 0.15) exec = 'OK FOR MARKET';
+    if (spread_pct !== null) {
+      if (spread_pct > 0.50) exec = 'AVOID';
+      else if (spread_pct < 0.15) exec = 'OK FOR MARKET';
+    }
 
     return {
-      spread_pct,
-      depth_ratio,
-      vol_ratio: vol_ratio || 0,
-      regime,
-      execution_style: exec,
-      bid, ask, bidQty, askQty,
+      spread_pct, depth_ratio, vol_ratio: vol_ratio || 0, regime,
+      execution_style: exec, bid, ask, bidQty, askQty,
       avg_vol_20d: avgVol || 0
     };
   };
@@ -240,31 +210,19 @@ export const PriorityStocksCard: React.FC = () => {
     const init = async () => {
       const stocks = await fetchTrackedSymbols();
       const marketStatus = getMarketSessionStatus();
-
-      // IF market is OPEN, or IF we have stocks with NO price (null in DB), perform a one-time fetch
       const needsOneTimeFetch = marketStatus.isOpen || stocks.some(s => s.last_price === null || s.last_price === 0);
-      
       if (stocks.length > 0 && needsOneTimeFetch) {
-        // Pass forceOnce=true to bypass the market-closed guard for this specific call
         updateQuotesBatch(stocks, true);
-        
-        // Always try to fetch historical data on load if possible to calculate vol ratios
         stocks.forEach(s => refreshHistoricalData(s.symbol));
       }
     };
     init();
-
-    // 4s polling for microstructure metrics (strictly market hours only)
     pollInterval.current = setInterval(() => {
       setPriorityStocks(currentList => {
-        const marketStatus = getMarketSessionStatus();
-        if (marketStatus.isOpen) {
-          updateQuotesBatch(currentList);
-        }
+        if (getMarketSessionStatus().isOpen) updateQuotesBatch(currentList);
         return currentList;
       });
     }, 4000);
-
     return () => { if (pollInterval.current) clearInterval(pollInterval.current); };
   }, []);
 
@@ -283,15 +241,8 @@ export const PriorityStocksCard: React.FC = () => {
           <h2 className="text-lg font-black text-slate-900 uppercase tracking-tighter mt-1">Watchlist</h2>
         </div>
         <div className="flex flex-col items-end">
-           <button 
-             onClick={() => setShowRawFeed(!showRawFeed)}
-             className={`text-[8px] font-black uppercase tracking-widest px-2 py-1 rounded-lg border transition-all ${showRawFeed ? 'bg-indigo-600 text-white border-indigo-600' : 'text-slate-400 border-slate-100 hover:bg-slate-50'}`}
-           >
-             Raw Feed
-           </button>
-           <p className="text-[9px] font-black text-indigo-600 uppercase tracking-tight mt-1">
-             {marketStatus.isOpen ? 'Stagger 300ms' : 'Polling Suspended'}
-           </p>
+           <button onClick={() => setShowRawFeed(!showRawFeed)} className={`text-[8px] font-black uppercase tracking-widest px-2 py-1 rounded-lg border transition-all ${showRawFeed ? 'bg-indigo-600 text-white border-indigo-600' : 'text-slate-400 border-slate-100 hover:bg-slate-50'}`}>Raw Feed</button>
+           <p className="text-[9px] font-black text-indigo-600 uppercase tracking-tight mt-1">{marketStatus.isOpen ? 'Stagger 300ms' : 'Polling Suspended'}</p>
         </div>
       </div>
 
@@ -309,29 +260,17 @@ export const PriorityStocksCard: React.FC = () => {
 
             return (
               <div key={stock.symbol} className="group relative rounded-xl border border-slate-100 bg-slate-50 hover:bg-white hover:border-indigo-100 hover:shadow-md transition-all duration-300 overflow-hidden">
-                <div 
-                  className="flex items-center justify-between p-3.5 cursor-pointer"
-                  onClick={() => setExpandedSymbol(isExpanded ? null : stock.symbol)}
-                >
+                <div className="flex items-center justify-between p-3.5 cursor-pointer" onClick={() => setExpandedSymbol(isExpanded ? null : stock.symbol)}>
                   <div className="flex flex-col">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs font-black text-slate-900">{stock.symbol}</span>
-                      {quote?.isError && (
-                        <div className="w-1 h-1 bg-amber-400 rounded-full animate-pulse" />
-                      )}
-                    </div>
+                    <div className="flex items-center gap-1.5"><span className="text-xs font-black text-slate-900">{stock.symbol}</span></div>
                     <span className="text-[7px] font-bold text-slate-400 uppercase truncate max-w-[100px]">{stock.company_name}</span>
                   </div>
-                  
                   <div className="flex items-center gap-4">
                     {quote && quote.last_traded_price > 0 ? (
                       <div className="text-right">
-                        <p className="text-xs font-black text-slate-900 tabular-nums">
-                          {quote.last_traded_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                        </p>
+                        <p className="text-xs font-black text-slate-900 tabular-nums">{quote.last_traded_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                         <div className={`flex items-center justify-end gap-1 text-[8px] font-black ${isPositive ? 'text-emerald-600' : 'text-rose-600'}`}>
-                          <span>{isPositive ? '▲' : '▼'}</span>
-                          <span className="tabular-nums">{Math.abs(quote.percent_change).toFixed(2)}%</span>
+                          <span>{isPositive ? '▲' : '▼'}</span><span className="tabular-nums">{Math.abs(quote.percent_change).toFixed(2)}%</span>
                         </div>
                       </div>
                     ) : (
@@ -340,106 +279,51 @@ export const PriorityStocksCard: React.FC = () => {
                          <p className="text-[8px] font-black text-slate-200 uppercase">Awaiting...</p>
                       </div>
                     )}
-                    
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); removeStock(stock.symbol); }}
-                      className="p-1.5 text-slate-300 hover:text-rose-500 transition-all rounded hover:bg-rose-50"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" /></svg>
-                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); removeStock(stock.symbol); }} className="p-1.5 text-slate-300 hover:text-rose-500 transition-all rounded hover:bg-rose-50"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" /></svg></button>
                   </div>
                 </div>
 
                 {isExpanded && (
                   <div className="p-5 bg-white border-t border-slate-50 space-y-6 animate-in slide-in-from-top-2 duration-300">
                     {showRawFeed ? (
-                      <pre className="text-[8px] font-mono bg-slate-50 p-3 rounded-xl overflow-x-auto text-slate-500 max-h-40 overflow-y-auto">
-                        {JSON.stringify({ quote, metrics, historical: historicalCache[stock.symbol] }, null, 2)}
-                      </pre>
-                    ) : (
+                      <pre className="text-[8px] font-mono bg-slate-50 p-3 rounded-xl overflow-x-auto text-slate-500 max-h-40 overflow-y-auto">{JSON.stringify({ quote, metrics, historical: historicalCache[stock.symbol] }, null, 2)}</pre>
+                    ) : metrics ? (
                       <>
                         <div className="space-y-5">
-                          {/* LINE 1: MICROSTRUCTURE */}
                           <div className="grid grid-cols-3 gap-4">
                             <div className="flex flex-col gap-1.5">
                               <p className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Best Bid</p>
-                              <p className="text-[10px] font-black text-slate-900 tabular-nums">
-                                ₹{metrics?.bid?.toLocaleString() || '—'} <span className="text-slate-400 text-[8px]">({metrics?.bidQty || 0})</span>
-                              </p>
+                              <p className="text-[10px] font-black text-slate-900 tabular-nums">₹{metrics?.bid?.toLocaleString() || '—'} <span className="text-slate-400 text-[8px]">({metrics?.bidQty || 0})</span></p>
                             </div>
                             <div className="flex flex-col gap-1.5">
                               <p className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Best Ask</p>
-                              <p className="text-[10px] font-black text-slate-900 tabular-nums">
-                                ₹{metrics?.ask?.toLocaleString() || '—'} <span className="text-slate-400 text-[8px]">({metrics?.askQty || 0})</span>
-                              </p>
+                              <p className="text-[10px] font-black text-slate-900 tabular-nums">₹{metrics?.ask?.toLocaleString() || '—'} <span className="text-slate-400 text-[8px]">({metrics?.askQty || 0})</span></p>
                             </div>
                             <div className="flex flex-col gap-1.5 text-right">
                               <p className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Spread %</p>
                               <div>
                                 <span className={`px-2 py-1 rounded text-[10px] font-black tabular-nums border inline-block ${
                                   metrics?.spread_pct === null ? 'bg-slate-50 text-slate-400 border-slate-100' :
-                                  metrics.spread_pct < 0.15 ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 
-                                  metrics.spread_pct < 0.50 ? 'bg-amber-50 text-amber-600 border-amber-100' : 'bg-rose-50 text-rose-600 border-rose-100'
-                                }`}>
-                                  {metrics?.spread_pct !== null ? metrics.spread_pct.toFixed(3) + '%' : '—'}
-                                </span>
+                                  metrics?.spread_pct !== undefined && metrics.spread_pct < 0.15 ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 
+                                  metrics?.spread_pct !== undefined && metrics.spread_pct < 0.50 ? 'bg-amber-50 text-amber-600 border-amber-100' : 'bg-rose-50 text-rose-600 border-rose-100'
+                                }`}>{metrics?.spread_pct !== null ? metrics.spread_pct.toFixed(3) + '%' : '—'}</span>
                               </div>
                             </div>
                           </div>
-
-                          {/* LINE 2: LIQUIDITY/REGIME */}
                           <div className="grid grid-cols-4 gap-4 pt-4 border-t border-slate-50">
-                            <div className="flex flex-col gap-1.5">
-                              <p className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Vol Today</p>
-                              <p className="text-[9px] font-black text-slate-900">{(quote?.volume ? (quote.volume / 1000000).toFixed(2) : '—')}M</p>
-                            </div>
-                            <div className="flex flex-col gap-1.5 text-center">
-                              <p className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Vol Ratio</p>
-                              <p className={`text-[9px] font-black ${metrics?.vol_ratio ? (metrics.vol_ratio > 2 ? 'text-emerald-600' : metrics.vol_ratio < 1 ? 'text-rose-500' : 'text-slate-900') : 'text-slate-400'}`}>
-                                {metrics?.vol_ratio?.toFixed(2) || '0.00'}x
-                              </p>
-                            </div>
-                            <div className="flex flex-col gap-1.5 text-center">
-                              <p className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Regime</p>
-                              <div>
-                                <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-widest border inline-block ${
-                                  metrics?.regime === 'BREAKOUT' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
-                                  metrics?.regime === 'DISTRIBUTION' ? 'bg-rose-50 text-rose-600 border-rose-100' :
-                                  'bg-slate-50 text-slate-400 border-slate-100'
-                                }`}>
-                                  {metrics?.regime || '—'}
-                                </span>
-                              </div>
-                            </div>
-                            <div className="flex flex-col gap-1.5 text-right">
-                              <p className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Exec Style</p>
-                              <div>
-                                <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-widest border inline-block ${
-                                  metrics?.execution_style === 'OK FOR MARKET' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
-                                  metrics?.execution_style === 'AVOID' ? 'bg-rose-50 text-rose-600 border-rose-100' :
-                                  'bg-amber-50 text-amber-600 border-amber-100'
-                                }`}>
-                                  {metrics?.execution_style || '—'}
-                                </span>
-                              </div>
-                            </div>
+                            <div className="flex flex-col gap-1.5"><p className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Vol Today</p><p className="text-[9px] font-black text-slate-900">{(quote?.volume ? (quote.volume / 1000000).toFixed(2) : '—')}M</p></div>
+                            <div className="flex flex-col gap-1.5 text-center"><p className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Vol Ratio</p><p className={`text-[9px] font-black ${metrics?.vol_ratio ? (metrics.vol_ratio > 2 ? 'text-emerald-600' : metrics.vol_ratio < 1 ? 'text-rose-500' : 'text-slate-900') : 'text-slate-400'}`}>{metrics?.vol_ratio?.toFixed(2) || '0.00'}x</p></div>
+                            <div className="flex flex-col gap-1.5 text-center"><p className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Regime</p><div><span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-widest border inline-block ${metrics?.regime === 'BREAKOUT' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : metrics?.regime === 'DISTRIBUTION' ? 'bg-rose-50 text-rose-600 border-rose-100' : 'bg-slate-50 text-slate-400 border-slate-100'}`}>{metrics?.regime || '—'}</span></div></div>
+                            <div className="flex flex-col gap-1.5 text-right"><p className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Exec Style</p><div><span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-widest border inline-block ${metrics?.execution_style === 'OK FOR MARKET' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : metrics?.execution_style === 'AVOID' ? 'bg-rose-50 text-rose-600 border-rose-100' : 'bg-amber-50 text-amber-600 border-amber-100'}`}>{metrics?.execution_style || '—'}</span></div></div>
                           </div>
                         </div>
-
-                        {/* HINT FOOTER */}
                         <div className="flex items-center justify-between gap-4 pt-4 border-t border-slate-50">
-                           <div className="flex items-center gap-2">
-                             <div className={`w-1.5 h-1.5 rounded-full ${metrics?.execution_style === 'OK FOR MARKET' ? 'bg-emerald-500' : metrics?.execution_style === 'AVOID' ? 'bg-rose-500' : 'bg-amber-500'}`} />
-                             <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">
-                               {getRecommendationHint(metrics)}
-                             </p>
-                           </div>
-                           <div className="flex items-baseline gap-1">
-                              <span className="text-[7px] font-black text-slate-400 uppercase">Avg Vol (20D):</span>
-                              <span className="text-[8px] font-bold text-slate-600">{metrics?.avg_vol_20d ? (metrics.avg_vol_20d / 1000000).toFixed(1) : '—'}M</span>
-                           </div>
+                           <div className="flex items-center gap-2"><div className={`w-1.5 h-1.5 rounded-full ${metrics?.execution_style === 'OK FOR MARKET' ? 'bg-emerald-500' : metrics?.execution_style === 'AVOID' ? 'bg-rose-500' : 'bg-amber-500'}`} /><p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">{getRecommendationHint(metrics)}</p></div>
+                           <div className="flex items-baseline gap-1"><span className="text-[7px] font-black text-slate-400 uppercase">Avg Vol (20D):</span><span className="text-[8px] font-bold text-slate-600">{metrics?.avg_vol_20d ? (metrics.avg_vol_20d / 1000000).toFixed(1) : '—'}M</span></div>
                         </div>
                       </>
+                    ) : (
+                      <div className="py-8 text-center"><p className="text-[9px] font-black text-slate-300 uppercase tracking-widest">Awaiting depth telemetry...</p></div>
                     )}
                   </div>
                 )}
